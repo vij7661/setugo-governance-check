@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Checker-owned exhaustive candidate-local import closure verifier for RELEASE.
+"""Checker-owned candidate-local dependency closure verifier for RELEASE.
 
-This verifier never trusts candidate declarations about its dependency closure.
-It checks exact Git blobs for every allowed authority-relevant runtime module,
-statically walks candidate-local imports from every entry point, rejects any
-reachable local module or package outside the allowlist, and rejects dynamic
-import/lookup/execution capability inside the governed closure. Passing is
-evidence only.
+The verifier exact-pins all authority-relevant runtime modules, walks their
+candidate-local imports transitively, and also treats every checker-selected,
+exact-pinned qualification test as an import root. Any candidate-local helper
+reachable from those tests must be present in the same exact runtime manifest.
+Dynamic import/lookup/execution capability is rejected in governed runtime code.
+Passing is evidence only.
 """
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ PINNED_RUNTIME_BLOBS = {
 }
 
 ENTRY_POINTS = frozenset(PINNED_RUNTIME_BLOBS)
+QUALIFICATION_TEST_FILES: frozenset[str] = frozenset()
 FORBIDDEN_DYNAMIC_SYMBOLS = frozenset({
     "__import__", "import_module", "exec", "eval", "compile", "getattr",
 })
@@ -128,6 +129,21 @@ def _imports_and_forbidden_nodes(path: Path) -> tuple[set[str], list[int]]:
     return imported, sorted(forbidden_lines)
 
 
+def _require_local_targets_pinned(runtime: Path, source_label: str, imports: set[str]) -> list[str]:
+    local_targets: list[str] = []
+    for module in sorted(imports):
+        target = _local_module_relpath(runtime, module)
+        if target is None:
+            continue
+        if target not in PINNED_RUNTIME_BLOBS:
+            raise AssertionError(
+                "unpinned candidate-local import reachable from governed source: "
+                f"{source_label} -> {target}"
+            )
+        local_targets.append(target)
+    return local_targets
+
+
 def verify_repo(repo: Path) -> dict[str, list[str]]:
     runtime = repo / RUNTIME_DIR
     if not runtime.is_dir():
@@ -156,17 +172,8 @@ def verify_repo(repo: Path) -> dict[str, list[str]]:
                 "dynamic import/lookup/execution capability forbidden in governed runtime closure: "
                 f"{runtime_relpath}:{forbidden_lines}"
             )
-        local_targets: list[str] = []
-        for module in sorted(imports):
-            target = _local_module_relpath(runtime, module)
-            if target is None:
-                continue
-            if target not in PINNED_RUNTIME_BLOBS:
-                raise AssertionError(
-                    "unpinned candidate-local import reachable from governed runtime: "
-                    f"{runtime_relpath} -> {target}"
-                )
-            local_targets.append(target)
+        local_targets = _require_local_targets_pinned(runtime, runtime_relpath, imports)
+        for target in local_targets:
             if target not in visited:
                 queue.append(target)
         edges[runtime_relpath] = local_targets
@@ -174,6 +181,18 @@ def verify_repo(repo: Path) -> dict[str, list[str]]:
     missing = set(PINNED_RUNTIME_BLOBS) - visited
     if missing:
         raise AssertionError(f"pinned runtime entries were not audited: {sorted(missing)}")
+
+    for test_filename in sorted(QUALIFICATION_TEST_FILES):
+        test_path = runtime / test_filename
+        if not test_path.is_file():
+            raise AssertionError(f"pinned qualification test missing from candidate runtime: {test_filename}")
+        imports, _ = _imports_and_forbidden_nodes(test_path)
+        edges[f"TEST:{test_filename}"] = _require_local_targets_pinned(
+            runtime,
+            f"TEST:{test_filename}",
+            imports,
+        )
+
     return {name: edges[name] for name in sorted(edges)}
 
 
