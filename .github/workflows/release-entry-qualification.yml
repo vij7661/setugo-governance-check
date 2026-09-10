@@ -3,7 +3,7 @@ name: RELEASE Entry Qualification
 on:
   push:
     branches:
-      - release/entry-qualification-001
+      - main
 
 permissions:
   contents: read
@@ -20,6 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           printf 'checker_sha=%s\n' "$GITHUB_SHA"
 
