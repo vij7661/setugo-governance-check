@@ -2,11 +2,15 @@
 """R11-hardened external-checker entry point for the R10 qualification path.
 
 Preserves R10 test-blob closure and removes candidate test-runner/import-precedence
-bypasses exposed by the independent R10 review.
+bypasses exposed by the independent R10 review. When the exact-current RELEASE
+wrapper supplies a runtime pin manifest, the checker-owned isolated runner also
+verifies candidate-local modules actually executed during qualification against
+that exact blob manifest.
 Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,7 +21,6 @@ checker = r9.checker
 _original_run = checker.run
 _original_dependency_closure = checker.verify_authority_critical_dependency_closure
 
-# Bridge-imported modules that contribute to qualification are externally pinned.
 r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update({
     "test_qualification_boundary_policy.py": "7977f8225be8001772531516421091a681295478",
     "test_manual_review_authority_spoofing_regression.py": "7c33e04883931a17bc50cfccba00363a8af461c0",
@@ -40,7 +43,6 @@ def _candidate_module_name(path: Path) -> str | None:
         return name[:-3]
     if name.endswith((".pyc", ".pyo")):
         return name.split(".", 1)[0]
-    # Extension modules can include ABI tags after the module name.
     if name.endswith((".so", ".pyd", ".dll", ".dylib")):
         return name.split(".", 1)[0]
     return None
@@ -68,8 +70,7 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
         return _original_run(cmd, cwd=cwd)
 
     runtime = Path(cwd).resolve()
-    is_candidate_runtime = runtime.name == "governance-runtime"
-    if not is_candidate_runtime:
+    if runtime.name != "governance-runtime":
         return _original_run(cmd, cwd=cwd)
 
     explicit_test_args = [str(arg) for arg in cmd if str(arg).endswith(".py") and str(arg).startswith("test_")]
@@ -84,8 +85,13 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
         bootstrap = Path(__file__).resolve().with_name("run_candidate_unittests_isolated.py")
         if not bootstrap.is_file():
             raise AssertionError("checker-owned isolated qualification runner is missing")
+        invocation = [sys.executable, "-I", str(bootstrap), str(runtime)]
+        runtime_pins_b64 = os.environ.get("SETUGO_RELEASE_RUNTIME_PINS_B64")
+        if runtime_pins_b64:
+            invocation.extend(["--runtime-pins-b64", runtime_pins_b64])
+        invocation.extend(explicit_test_args)
         subprocess.run(
-            [sys.executable, "-I", str(bootstrap), str(runtime), *explicit_test_args],
+            invocation,
             cwd=checker.CHECKER_ROOT,
             env={"PATH": str(Path(sys.executable).resolve().parent) + ":/usr/local/bin:/usr/bin:/bin"},
             check=True,
