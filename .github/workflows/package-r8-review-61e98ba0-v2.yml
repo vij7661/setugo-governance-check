@@ -1,0 +1,191 @@
+name: Package strengthened R8 review 61e98ba0
+
+on:
+  push:
+    branches:
+      - package/r8-review-61e98ba0-v2
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout packaging branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Build exact review packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_SHA=61e98ba0ca8fc461b407e91e4f60ffc687fc784e
+          CHECKER_SHA=37df9c463d8db7bde4616e2f71f621b7188a40b6
+          ROOT_SHA=5f470774ec8c17f5519da8db2aaae59af114cef9
+          R8_EVIDENCE_SHA=e058be4b7d8d3cad32b3f7e1836bf251a34342f1
+          OUT=TESTING-QUALIFICATION-R8-REVIEW-61e98ba0-DEEPSEEK.txt
+
+          git clone -q https://github.com/vij7661/setugo-ai-development-framework.git candidate
+          git -C candidate checkout -q "$CANDIDATE_SHA"
+          git -C candidate fetch -q origin evidence/testing-f81eb5f3 repair/testing-independent-refalsification-008
+
+          git clone -q https://github.com/vij7661/setugo-governance-root.git root
+          git -C root checkout -q "$ROOT_SHA"
+
+          git clone -q https://github.com/vij7661/setugo-governance-check.git checker-exact
+          git -C checker-exact checkout -q "$CHECKER_SHA"
+
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, subprocess
+
+          out = Path('TESTING-QUALIFICATION-R8-REVIEW-61e98ba0-DEEPSEEK.txt')
+          candidate = Path('candidate')
+          checker = Path('checker-exact')
+          root = Path('root')
+
+          header = '''INDEPENDENT FALSIFICATION REVIEW PACKET — R8 STRENGTHENED STATE
+
+Authority effect of this packet: NONE_EVIDENCE_ONLY
+Review posture: assume false-green until proven otherwise.
+
+Exact scientific subject candidate SHA:
+61e98ba0ca8fc461b407e91e4f60ffc687fc784e
+
+Exact external checker SHA that produced latest bounded PASS evidence:
+37df9c463d8db7bde4616e2f71f621b7188a40b6
+
+Exact external governance root SHA:
+5f470774ec8c17f5519da8db2aaae59af114cef9
+
+Latest strengthened external checker run:
+run_id=34471548437
+conclusion=success
+result=PASS_BOUNDED_EVIDENCE_ONLY
+candidate_check_run_id=102852431333
+candidate_check_name=external-governance-qualification
+candidate_check_app_id=4895420
+candidate_check_external_id=37df9c463d8db7bde4616e2f71f621b7188a40b6
+candidate_check_head_sha=61e98ba0ca8fc461b407e91e4f60ffc687fc784e
+candidate governance tests executed by checker=106/106 OK
+
+Important: the above PASS is evidence only. It does not grant TESTING, RELEASE, PRODUCTION, merge, deployment, or terminal authority.
+
+REVIEW REQUEST
+Re-falsify all R8-01 through R8-07 findings and search for new material false-green paths. In particular test whether:
+- unpinned/replaceable authority-critical imports can forge terminal authority;
+- the external required check is actually source-bound to GitHub App 4895420;
+- external checker revision/credential governance can be bypassed by candidate code;
+- compatibility/import surfaces bypass pinned policy semantics;
+- signed-attestation evidence is reproducible from supplied non-secret fixtures;
+- exact-SHA lineage is preserved rather than replayed across successors;
+- missing GitHub administrative fields are handled fail-closed and the signed ruleset attestation cannot silently become stale;
+- the timestamp normalization wrapper weakens comparisons beyond equivalence of one ISO-8601 instant;
+- any green CI/check/reviewer output is being treated as authority rather than evidence.
+
+Return one disposition: TESTING_RULES_PASS, TESTING_RULES_BOUNDED_PASS, CHANGES_REQUIRED, or INSUFFICIENT_EVIDENCE. Provide exact failure paths and severity. Do not assume facts outside this packet.
+
+'''
+          out.write_text(header, encoding='utf-8')
+
+          def append_bytes(label, source, data):
+              h = hashlib.sha256(data).hexdigest()
+              with out.open('ab') as f:
+                  f.write((f'\n===== ARTIFACT: {label} =====\nBYTE_LENGTH: {len(data)}\nSHA256: {h}\n===== BEGIN =====\n').encode())
+                  f.write(data)
+                  if not data.endswith(b'\n'):
+                      f.write(b'\n')
+                  f.write(b'===== END =====\n')
+
+          candidate_files = [
+              'governance-runtime/qualification_boundary_policy_v4.py',
+              'governance-runtime/qualification_boundary_policy.py',
+              'governance-runtime/manual_authority_verifier.py',
+              'governance-runtime/external_governance_root.py',
+              'governance-runtime/test_qualification_boundary_policy.py',
+              'governance-runtime/test_manual_authority_verifier.py',
+              'governance-runtime/test_manual_authority_signed_attestation.py',
+              'governance-runtime/test_external_governance_root.py',
+              'governance-runtime/test_external_root_policy_binding.py',
+              'governance-runtime/verify_external_trust_root_control.py',
+              'governance-runtime/test_external_trust_root_control.py',
+              'governance-runtime/test_qualification_boundary_unittest_bridge.py',
+              'governance-runtime/repair-preregistrations/TESTING-QUALIFICATION-INDEPENDENT-REFALSIFICATION-007.md',
+              'governance-runtime/failures/TESTING-QUALIFICATION-INDEPENDENT-REFALSIFICATION-RED-007.md',
+              '.github/workflows/testing-qualification-boundary-ownership.yml',
+              'standards/qualification-boundary-ownership.md',
+              'governance-runtime/manual-attestations/ed265f37487bccffcc5f4463f5f3b62ee9f2b713.acceptance-boundary.json',
+              'governance-runtime/manual-attestations/ed265f37487bccffcc5f4463f5f3b62ee9f2b713.acceptance-boundary.sig.b64',
+          ]
+          for p in candidate_files:
+              path = candidate / p
+              if not path.is_file():
+                  raise SystemExit(f'missing required candidate artifact: {p}')
+              append_bytes(f'candidate@61e98ba0:{p}', path, path.read_bytes())
+
+          # Historical f81 signed fixture from its separate evidence branch.
+          for p in [
+              'governance-runtime/manual-attestations/f81eb5f3cbde819d60c134ba73287dedc6b67e0b.acceptance-boundary.json',
+              'governance-runtime/manual-attestations/f81eb5f3cbde819d60c134ba73287dedc6b67e0b.acceptance-boundary.sig.b64',
+          ]:
+              data = subprocess.check_output(['git','-C','candidate','show',f'origin/evidence/testing-f81eb5f3:{p}'])
+              append_bytes(f'candidate-evidence-branch:{p}', p, data)
+
+          # R8 preserved finding and preregistration from repair lineage; evidence only, not candidate contents.
+          for p in [
+              'governance-runtime/repair-preregistrations/TESTING-QUALIFICATION-INDEPENDENT-REFALSIFICATION-008.md',
+              'governance-runtime/failures/TESTING-QUALIFICATION-INDEPENDENT-REFALSIFICATION-R8-001.md',
+          ]:
+              data = subprocess.check_output(['git','-C','candidate','show',f'origin/repair/testing-independent-refalsification-008:{p}'])
+              append_bytes(f'R8-repair-lineage@e058be4b:{p}', p, data)
+
+          checker_files = [
+              'README.md',
+              'checker/falsify_candidate.py',
+              'checker/falsify_candidate_entry.py',
+              '.github/workflows/external-qualification.yml',
+              'evidence/phase-testing-ruleset-22736961.attestation.json',
+              'evidence/phase-testing-ruleset-22736961.attestation.sig.b64',
+          ]
+          for p in checker_files:
+              path = checker / p
+              if not path.is_file():
+                  raise SystemExit(f'missing required checker artifact: {p}')
+              append_bytes(f'checker@37df9c46:{p}', path, path.read_bytes())
+
+          root_files = [
+              'README.md',
+              'trust-roots/SETUGO_MANUAL_GOVERNANCE_ED25519_V1.pem',
+              'trust-roots/SETUGO_MANUAL_GOVERNANCE_ED25519_V1.json',
+          ]
+          for p in root_files:
+              path = root / p
+              if not path.is_file():
+                  raise SystemExit(f'missing required root artifact: {p}')
+              append_bytes(f'root@5f470774:{p}', path, path.read_bytes())
+
+          # Administrative/live evidence snapshots copied as exact JSON text into packet.
+          ruleset = b'''{"id":22736961,"name":"phase/testing","target":"branch","source_type":"Repository","source":"vij7661/setugo-ai-development-framework","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["refs/heads/phase/testing"]}},"rules":[{"type":"deletion"},{"type":"non_fast_forward"},{"type":"pull_request","parameters":{"required_approving_review_count":0,"dismiss_stale_reviews_on_push":false,"required_reviewers":[],"require_code_owner_review":false,"require_last_push_approval":false,"required_review_thread_resolution":true,"require_extra_approval_for_unattributed_changes":true,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"do_not_enforce_on_create":false,"required_status_checks":[{"context":"falsify-qualification-boundary"},{"context":"falsify-qualification-boundary","integration_id":15368},{"context":"external-governance-qualification","integration_id":4895420}]}}],"created_at":"2026-09-10T12:24:21.072+05:30","updated_at":"2026-09-10T15:22:40.267+05:30","bypass_actors":[],"current_user_can_bypass":"never"}\n'''
+          append_bytes('live-admin-snapshot:candidate-ruleset-22736961', 'snapshot', ruleset)
+
+          checker_ruleset = b'''{"id":22757786,"name":"governanace-check-main","target":"branch","source_type":"Repository","source":"vij7661/setugo-governance-check","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["~DEFAULT_BRANCH"]}},"rules":[{"type":"non_fast_forward"},{"type":"pull_request","parameters":{"required_approving_review_count":0,"dismiss_stale_reviews_on_push":false,"required_reviewers":[],"require_code_owner_review":false,"require_last_push_approval":false,"required_review_thread_resolution":true,"require_extra_approval_for_unattributed_changes":true,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"deletion"}],"created_at":"2026-09-10T15:58:24.363+05:30","updated_at":"2026-09-10T15:58:24.413+05:30","bypass_actors":[],"current_user_can_bypass":"never"}\n'''
+          append_bytes('live-admin-snapshot:checker-ruleset-22757786', 'snapshot', checker_ruleset)
+
+          check_runs = b'''{"candidate_sha":"61e98ba0ca8fc461b407e91e4f60ffc687fc784e","check_runs":[{"id":102852431333,"name":"external-governance-qualification","head_sha":"61e98ba0ca8fc461b407e91e4f60ffc687fc784e","external_id":"37df9c463d8db7bde4616e2f71f621b7188a40b6","status":"completed","conclusion":"success","app":{"id":4895420,"slug":"setugo-governance-vij7661","permissions":{"administration":"read","checks":"write","contents":"read","metadata":"read"}}},{"id":102825416969,"name":"falsify-qualification-boundary","head_sha":"61e98ba0ca8fc461b407e91e4f60ffc687fc784e","status":"completed","conclusion":"success","app":{"id":15368,"slug":"github-actions"}}]}\n'''
+          append_bytes('live-check-run-snapshot:61e98ba0', 'snapshot', check_runs)
+
+          digest = hashlib.sha256(out.read_bytes()).hexdigest()
+          Path(out.name + '.sha256').write_text(digest + '  ' + out.name + '\n')
+          print('packet_sha256=' + digest)
+          print('packet_bytes=' + str(out.stat().st_size))
+          PY
+
+      - name: Upload review packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: TESTING-QUALIFICATION-R8-REVIEW-61e98ba0-DEEPSEEK
+          path: |
+            TESTING-QUALIFICATION-R8-REVIEW-61e98ba0-DEEPSEEK.txt
+            TESTING-QUALIFICATION-R8-REVIEW-61e98ba0-DEEPSEEK.txt.sha256
+          if-no-files-found: error
+          retention-days: 90
