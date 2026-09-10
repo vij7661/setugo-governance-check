@@ -22,7 +22,7 @@ EXPECTED_EXTERNAL_ROOT_REPOSITORY = "vij7661/setugo-governance-root"
 EXPECTED_EXTERNAL_ROOT_REPOSITORY_ID = 1363676838
 EXPECTED_EXTERNAL_ROOT_COMMIT = "5f470774ec8c17f5519da8db2aaae59af114cef9"
 EXPECTED_EXTERNAL_ROOT_DER_SHA256 = "2b1b97ab0bf99e71f4a93f51fd8e6c3eb30063d83ba2eb4c091492a95f9c11f2"
-EXPECTED_POLICY_BLOB_SHA = "23615ec522a234bf41216165cf368079a17f38cf"
+EXPECTED_POLICY_BLOB_SHA = "019b89f32deba5a7bc93274ff41ad7e61a1aaad3"
 EXPECTED_EXTERNAL_ROOT_MODULE_BLOB_SHA = "c83b4aa9f1253f2cbd5a26b6857af8ded8bbc808"
 EXPECTED_RULE_PHASES = {
     "TESTING_ACCEPTANCE_BOUNDARY": "TESTING",
@@ -131,6 +131,7 @@ def falsify(repo: str, sha: str) -> dict[str, object]:
         assert_equal(git_blob_sha(ext_path), EXPECTED_EXTERNAL_ROOT_MODULE_BLOB_SHA, "externally pinned external-root module blob")
 
         policy = load_module(policy_path)
+        assert_equal(policy.POLICY_VERSION, 6, "externally pinned qualification policy version")
 
         # R7-01: naked caller-controlled role/provenance/current booleans must never grant authority.
         allowed, _ = policy.terminal_authority_allowed(
