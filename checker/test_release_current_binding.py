@@ -10,6 +10,8 @@ EXPECTED_CANDIDATE = "4200397f21e12f900c309ee1bc66fa8424135f11"
 EXPECTED_RELEASE_ROOT_BLOB = "7de7c00519853d5ff0d776d40f94c20c9d5f976d"
 EXPECTED_EXTRA_RUNTIME_HELPER = "verify_external_trust_root_control.py"
 EXPECTED_EXTRA_RUNTIME_HELPER_BLOB = "98b48d5f8133f527c9490a4d02b477a56a2ae997"
+EXPECTED_IMPORTED_TEST_HELPER = "test_manual_review_authority_ingress_regression.py"
+EXPECTED_IMPORTED_TEST_HELPER_BLOB = "62980bcd63f398cd9209c015c8a2c66af9829e26"
 
 
 class ReleaseCurrentBindingTests(unittest.TestCase):
@@ -23,7 +25,7 @@ class ReleaseCurrentBindingTests(unittest.TestCase):
             EXPECTED_RELEASE_ROOT_BLOB,
         )
 
-    def test_runtime_execution_manifest_is_derived_from_all_authoritative_runtime_pin_sets(self):
+    def test_runtime_execution_manifest_is_derived_from_all_authoritative_candidate_code_pin_sets(self):
         runtime_pins = current_release.release.r10.RUNTIME_PINNED_BLOBS
         for relpath, blob in current_release.runtime_closure.PINNED_RUNTIME_BLOBS.items():
             self.assertEqual(blob, runtime_pins.get(relpath), relpath)
@@ -32,9 +34,15 @@ class ReleaseCurrentBindingTests(unittest.TestCase):
             if relpath.startswith(prefix):
                 runtime_relpath = relpath[len(prefix):]
                 self.assertEqual(blob, runtime_pins.get(runtime_relpath), runtime_relpath)
+        for relpath, blob in current_release.release.r10.r9.EXPECTED_QUALIFICATION_TEST_BLOBS.items():
+            self.assertEqual(blob, runtime_pins.get(relpath), relpath)
         self.assertEqual(
             EXPECTED_EXTRA_RUNTIME_HELPER_BLOB,
             runtime_pins.get(EXPECTED_EXTRA_RUNTIME_HELPER),
+        )
+        self.assertEqual(
+            EXPECTED_IMPORTED_TEST_HELPER_BLOB,
+            runtime_pins.get(EXPECTED_IMPORTED_TEST_HELPER),
         )
 
     def test_merge_authority_verifier_is_bound_to_same_candidate(self):
