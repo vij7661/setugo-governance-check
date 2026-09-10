@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """RELEASE R1/R3 external qualification extension.
 
-Extends the R11 external checker for the exact RELEASE successor, pins the
-repaired bridge plus RELEASE shape-guard regression, and independently executes
-candidate-side qualification paths. Authority effect: NONE_EVIDENCE_ONLY.
+Extends the R11 external checker for the exact RELEASE successor, refreshes only
+externally observed blobs that changed in the preregistered R3 successor, and
+independently executes RELEASE-specific qualification paths.
+
+Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
@@ -18,9 +20,25 @@ import falsify_candidate_r10_entry as r10
 RELEASE_CANDIDATE_SHA = "6d4fbb9ce266979ca3147a159ae724f33e0362ba"
 CANDIDATE_REPO = "https://github.com/vij7661/setugo-ai-development-framework.git"
 
+# Successor-specific authority-critical pins. The TESTING v6 module and external
+# TESTING root remain pinned by the inherited checker; only the files actually
+# changed to route active policy through v7 are refreshed here.
+r10.checker.EXPECTED_MANUAL_AUTHORITY_VERIFIER_BLOB_SHA = "fbcd992d7c3ea1c415bd01e3a0d638865f0f5898"
+r10.checker.EXPECTED_POLICY_FACADE_BLOB_SHA = "998cb2a90b6530132239e1a6274718b605680909"
+
 RELEASE_TEST_BLOBS = {
+    "test_qualification_boundary_policy.py": "406bd608be28c440209aea12b060c31822ced1fc",
     "test_qualification_boundary_unittest_bridge.py": "74bc4969b83f1f7a8202af05db84f170cfe842dd",
     "test_release_r1_bridge_shape_guard.py": "73efc664eac408b1d581426d736353ef729c3600",
+    "test_release_r3_phase_scoped_authority.py": "2666bf3ad24ecccd0e68e1025b786dfbadd0977e",
+}
+
+# These newly introduced phase-scoped modules are pinned separately because the
+# inherited TESTING checker deliberately knows nothing about RELEASE authority.
+RELEASE_RUNTIME_BLOBS = {
+    "governance-runtime/qualification_boundary_policy_v7.py": "f981a01b86b5020587bcf1817c484af64604c601",
+    "governance-runtime/release_external_governance_root.py": "581e9ce5c2a4a23755d4d61cad6bbde890b4e5d6",
+    "governance-runtime/release_manual_authority_verifier.py": "6e71413054d599fccfc4a265228a2a681f9d2ed0",
 }
 
 EXTRA_EXECUTION_BLOBS = {
@@ -32,16 +50,31 @@ r10.r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update(RELEASE_TEST_BLOBS)
 r10.QUALIFICATION_TEST_FILES = frozenset(r10.r9.EXPECTED_QUALIFICATION_TEST_BLOBS)
 
 _original_run = r10.checker.run
+_original_assert_equal = r10.checker.assert_equal
+
+
+def _release_assert_equal(actual: object, expected: object, label: str) -> None:
+    # The inherited checker intentionally hard-codes TESTING policy v6. For the
+    # RELEASE successor the active compatibility facade is externally pinned and
+    # must resolve to v7. No other inherited comparison is relaxed.
+    if label == "externally pinned qualification policy version":
+        return _original_assert_equal(actual, 7, label)
+    return _original_assert_equal(actual, expected, label)
 
 
 def _release_run(cmd: list[str], cwd: Path | None = None) -> None:
     if cwd is not None and Path(cwd).name == "governance-runtime":
         explicit = [str(arg) for arg in cmd if str(arg).endswith(".py") and str(arg).startswith("test_")]
-        if explicit and "test_release_r1_bridge_shape_guard.py" not in explicit:
-            cmd = list(cmd) + ["test_release_r1_bridge_shape_guard.py"]
+        required = ("test_release_r1_bridge_shape_guard.py", "test_release_r3_phase_scoped_authority.py")
+        if explicit:
+            cmd = list(cmd)
+            for filename in required:
+                if filename not in explicit:
+                    cmd.append(filename)
     return _original_run(cmd, cwd=cwd)
 
 
+r10.checker.assert_equal = _release_assert_equal
 r10.checker.run = _release_run
 
 
@@ -116,7 +149,7 @@ def _run_unittest_module_isolated(directory: Path, module_name: str, *, env: dic
 
 
 def verify_and_execute_extra_release_paths() -> None:
-    with tempfile.TemporaryDirectory(prefix="setugo-release-r1-") as td:
+    with tempfile.TemporaryDirectory(prefix="setugo-release-r3-") as td:
         repo = Path(td) / "candidate"
         subprocess.run(["git", "clone", "--no-checkout", "--filter=blob:none", CANDIDATE_REPO, str(repo)], check=True)
         subprocess.run(["git", "fetch", "--depth=1", "origin", RELEASE_CANDIDATE_SHA], cwd=repo, check=True)
@@ -125,7 +158,7 @@ def verify_and_execute_extra_release_paths() -> None:
         if actual != RELEASE_CANDIDATE_SHA:
             raise AssertionError("external RELEASE checkout is not exact candidate SHA")
 
-        for relpath, expected_blob in EXTRA_EXECUTION_BLOBS.items():
+        for relpath, expected_blob in {**RELEASE_RUNTIME_BLOBS, **EXTRA_EXECUTION_BLOBS}.items():
             actual_blob = _git_blob_sha(repo, relpath)
             if actual_blob != expected_blob:
                 raise AssertionError(
@@ -136,6 +169,11 @@ def verify_and_execute_extra_release_paths() -> None:
         env["PYTHONNOUSERSITE"] = "1"
         _run_file_with_sibling_imports(
             repo / "governance-runtime/verify_external_trust_root_control.py",
+            env=env,
+        )
+        _run_unittest_module_isolated(
+            repo / "governance-runtime",
+            "test_release_r3_phase_scoped_authority",
             env=env,
         )
         _run_unittest_module_isolated(
