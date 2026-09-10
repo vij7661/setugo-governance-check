@@ -3,11 +3,16 @@
 
 This checker-owned wrapper preserves the reviewed RELEASE falsifier while
 rebinding only the exact candidate SHA, the authenticated RELEASE-root blob,
-and the F-08-required independent adjudication App check. It additionally
-requires an exhaustive checker-owned candidate-local runtime import closure
-audit before RELEASE external qualification can pass. Authority effect: none.
+and the F-08-required independent adjudication App check. It requires both an
+exhaustive checker-owned static candidate-local runtime import closure audit and
+runtime observation of candidate-local modules actually executed by the
+isolated qualification runner. Authority effect: none.
 """
 from __future__ import annotations
+
+import base64
+import json
+import os
 
 import falsify_candidate_release_r1 as release
 import verify_release_runtime_import_closure as runtime_closure
@@ -24,6 +29,13 @@ release.RELEASE_REQUIRED_CHECKS = frozenset(
     set(release.RELEASE_REQUIRED_CHECKS) | {REQUIRED_REVIEW_ADJUDICATION_CHECK}
 )
 runtime_closure.CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
+
+# Feed the same checker-owned exact runtime blob allowlist into the isolated
+# candidate test runner. The runner verifies every candidate-local module it
+# actually executes, independently of the static AST closure walk.
+os.environ["SETUGO_RELEASE_RUNTIME_PINS_B64"] = base64.b64encode(
+    json.dumps(runtime_closure.PINNED_RUNTIME_BLOBS, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).decode("ascii")
 
 _original_extra_release_paths = release.verify_and_execute_extra_release_paths
 
