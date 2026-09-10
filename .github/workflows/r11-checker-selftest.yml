@@ -45,7 +45,10 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import falsify_candidate_release_current as current
-          graph = current.runtime_closure.verify(current.CURRENT_RELEASE_CANDIDATE_SHA)
+          graph = current.runtime_closure.verify(
+              current.CURRENT_RELEASE_CANDIDATE_SHA,
+              qualification_test_files=current.CURRENT_QUALIFICATION_TEST_FILES,
+          )
           if not graph:
               raise SystemExit('configured RELEASE closure returned no audited graph')
           for source, targets in graph.items():
