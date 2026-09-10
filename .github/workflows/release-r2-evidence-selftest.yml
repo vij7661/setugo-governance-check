@@ -1,0 +1,32 @@
+name: RELEASE R2 Evidence Selftest
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  release-r2-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact external checker
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate exact checker checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          printf 'checker_sha=%s\n' "$GITHUB_SHA"
+
+      - name: Run RELEASE R2 adversarial evidence matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest -v checker/test_release_r2_evidence.py
