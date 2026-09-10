@@ -33,17 +33,30 @@ jobs:
           owner: vij7661
           repositories: setugo-ai-development-framework
 
-      - name: Execute RELEASE entry checker
+      - name: Execute RELEASE entry checker and prove candidate lineage
         id: qualify
         continue-on-error: true
         shell: bash
         env:
           GOVERNANCE_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_SHA: 15d50cc25ae524fc64e2c65269c91135e0361846
+          CANDIDATE_SHA: ffec566022fcd221fb4ab7569ed3bc245f75b546
         run: |
           set -euo pipefail
           python checker/release_entry_qualification.py \
-            --sha 15d50cc25ae524fc64e2c65269c91135e0361846 \
+            --sha "$SOURCE_SHA" \
             --token "$GOVERNANCE_TOKEN" | tee release-entry-result.json
+
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+          git -c http.extraheader="AUTHORIZATION: bearer $GOVERNANCE_TOKEN" clone \
+            --filter=blob:none --no-checkout \
+            https://github.com/vij7661/setugo-ai-development-framework.git "$TMP/candidate"
+          git -C "$TMP/candidate" -c http.extraheader="AUTHORIZATION: bearer $GOVERNANCE_TOKEN" fetch --depth=256 origin "$SOURCE_SHA" "$CANDIDATE_SHA"
+          git -C "$TMP/candidate" checkout --detach "$CANDIDATE_SHA"
+          [[ "$(git -C "$TMP/candidate" rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          git -C "$TMP/candidate" merge-base --is-ancestor "$SOURCE_SHA" "$CANDIDATE_SHA"
+          printf 'release_entry_source=%s\nrelease_candidate=%s\nlineage=verified\n' "$SOURCE_SHA" "$CANDIDATE_SHA"
 
       - name: Publish dedicated RELEASE-entry App check
         id: publish
@@ -52,21 +65,22 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           STEP_OUTCOME: ${{ steps.qualify.outcome }}
           SOURCE_SHA: 15d50cc25ae524fc64e2c65269c91135e0361846
+          CANDIDATE_SHA: ffec566022fcd221fb4ab7569ed3bc245f75b546
           CHECKER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [[ "$STEP_OUTCOME" == "success" ]]; then
             CONCLUSION=success
             TITLE='External RELEASE entry qualification passed (evidence only)'
-            SUMMARY="Checker ${CHECKER_SHA} satisfied frozen RELEASE-entry contract. Evidence only; no RELEASE terminal authority."
+            SUMMARY="Checker ${CHECKER_SHA} verified RELEASE-entry source ${SOURCE_SHA} and ancestry into exact candidate ${CANDIDATE_SHA}. Evidence only; no RELEASE terminal authority."
           else
             CONCLUSION=failure
             TITLE='External RELEASE entry qualification failed closed'
-            SUMMARY="Checker ${CHECKER_SHA} rejected RELEASE entry. phase/release must not advance."
+            SUMMARY="Checker ${CHECKER_SHA} could not establish frozen RELEASE-entry qualification and lineage for ${CANDIDATE_SHA}. phase/release must not advance."
           fi
           jq -n \
             --arg name 'external-release-entry-qualification' \
-            --arg head_sha "$SOURCE_SHA" \
+            --arg head_sha "$CANDIDATE_SHA" \
             --arg external_id "$CHECKER_SHA" \
             --arg conclusion "$CONCLUSION" \
             --arg title "$TITLE" \
@@ -79,7 +93,7 @@ jobs:
             https://api.github.com/repos/vij7661/setugo-ai-development-framework/check-runs \
             -d @check.json)"
           printf '%s\n' "$RESPONSE" > published-check.json
-          test "$(jq -r '.head_sha' published-check.json)" = "$SOURCE_SHA"
+          test "$(jq -r '.head_sha' published-check.json)" = "$CANDIDATE_SHA"
           test "$(jq -r '.external_id' published-check.json)" = "$CHECKER_SHA"
           test "$(jq -r '.app.id' published-check.json)" = '4895420'
           test "$(jq -r '.name' published-check.json)" = 'external-release-entry-qualification'
@@ -91,6 +105,6 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$STEP_OUTCOME" == success ]] || {
-            echo 'RELEASE entry remains blocked by frozen checker.' >&2
+            echo 'RELEASE entry remains blocked by frozen checker or lineage proof.' >&2
             exit 1
           }
