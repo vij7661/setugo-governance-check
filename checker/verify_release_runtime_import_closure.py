@@ -27,6 +27,7 @@ PINNED_RUNTIME_BLOBS = {
     "external_governance_root.py": "c83b4aa9f1253f2cbd5a26b6857af8ded8bbc808",
     "release_manual_authority_verifier.py": "6e71413054d599fccfc4a265228a2a681f9d2ed0",
     "release_external_governance_root.py": "7de7c00519853d5ff0d776d40f94c20c9d5f976d",
+    "verify_external_trust_root_control.py": "98b48d5f8133f527c9490a4d02b477a56a2ae997",
     "review_protocol.py": "1bf92a5775a780f0f32d166fb6c6a0c522bbf490",
     "phase_policy.py": "219d406d0335a318d91c8c940b19b8a39ad63a03",
     "build_portable_review_packet.py": "7fd7fb621e8a1884eb34fd3e2d07db3f94242b58",
@@ -88,28 +89,15 @@ def _attribute_root(node: ast.AST) -> str | None:
 
 
 def _forbidden_dynamic_node(node: ast.AST) -> bool:
-    # Direct builtin/dynamic symbol references are forbidden, including aliasing
-    # such as `fn = exec`. Ordinary methods with the same terminal name (for
-    # example `re.compile`) are not equivalent to the builtin capability.
     if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
         return node.id in FORBIDDEN_DYNAMIC_SYMBOLS
-
-    # Explicit dangerous-module attribute access is forbidden. Imports of these
-    # modules are independently forbidden below, so aliases cannot create a
-    # static bypass without already tripping that rule.
     if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
         return (
             node.attr in FORBIDDEN_DYNAMIC_SYMBOLS
             and _attribute_root(node) in FORBIDDEN_DYNAMIC_BASES
         )
-
-    # Reflective lookup itself is forbidden in authority-relevant runtime. This
-    # closes computed-string variants such as getattr(obj, 'ex' + 'ec').
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr":
         return True
-
-    # Reject builtin dictionary dispatch, but do not confuse an unrelated
-    # application dictionary key named "compile" with Python's compile builtin.
     if isinstance(node, ast.Subscript):
         key = _constant_string(node.slice)
         base = _attribute_root(node.value)
