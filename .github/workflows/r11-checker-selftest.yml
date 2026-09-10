@@ -35,7 +35,8 @@ jobs:
           python -m unittest -v \
             test_release_current_binding.py \
             test_release_runtime_import_closure.py \
-            test_release_runtime_execution_guard.py
+            test_release_runtime_execution_guard.py \
+            test_release_runtime_capability_semantics.py
 
       - name: Run hardened closure against exact frozen RELEASE candidate
         working-directory: checker
