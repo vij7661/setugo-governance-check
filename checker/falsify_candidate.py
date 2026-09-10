@@ -7,6 +7,7 @@ floor outside that repository. Passing is evidence only and grants no authority.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.util
 import json
@@ -32,9 +33,14 @@ EXPECTED_POLICY_FACADE_BLOB_SHA = "8aac9f913df76f3d8d7760ab2989610a47da14bf"
 EXPECTED_RULESET_ID = 22736961
 EXPECTED_RULESET_NAME = "phase/testing"
 EXPECTED_RULESET_TARGET_REF = "refs/heads/phase/testing"
+EXPECTED_RULESET_UPDATED_AT = "2026-09-10T15:22:40.267+05:30"
 EXPECTED_EXTERNAL_CHECK_CONTEXT = "external-governance-qualification"
 EXPECTED_EXTERNAL_CHECK_APP_ID = 4895420
 EXPECTED_GITHUB_ACTIONS_APP_ID = 15368
+
+CHECKER_ROOT = Path(__file__).resolve().parent.parent
+RULESET_ATTESTATION = CHECKER_ROOT / "evidence" / "phase-testing-ruleset-22736961.attestation.json"
+RULESET_ATTESTATION_SIG = CHECKER_ROOT / "evidence" / "phase-testing-ruleset-22736961.attestation.sig.b64"
 
 EXPECTED_RULE_PHASES = {
     "TESTING_ACCEPTANCE_BOUNDARY": "TESTING",
@@ -87,7 +93,6 @@ def git_blob_sha(path: Path) -> str:
 
 
 def load_runtime_facade(path: Path):
-    # Exercise the same compatibility import surface used by candidate consumers.
     for name in (
         "qualification_boundary_policy",
         "qualification_boundary_policy_v4",
@@ -121,7 +126,7 @@ def load_module(path: Path, name: str):
     return module
 
 
-def verify_live_external_root(work: Path) -> None:
+def verify_live_external_root(work: Path) -> Path:
     metadata = github_repo_metadata(EXPECTED_EXTERNAL_ROOT_REPOSITORY)
     assert_equal(metadata.get("full_name"), EXPECTED_EXTERNAL_ROOT_REPOSITORY, "live root repository name")
     assert_equal(metadata.get("id"), EXPECTED_EXTERNAL_ROOT_REPOSITORY_ID, "live root repository id")
@@ -147,23 +152,70 @@ def verify_live_external_root(work: Path) -> None:
     assert_equal(root_meta.get("trust_root_id"), "SETUGO_MANUAL_GOVERNANCE_ED25519_V1", "external trust-root id")
     assert_equal(root_meta.get("public_key_der_sha256"), EXPECTED_EXTERNAL_ROOT_DER_SHA256, "external metadata fingerprint")
     assert_equal(root_meta.get("private_key_must_never_be_committed"), True, "external root private-key prohibition")
+    return pem
 
 
-def verify_live_candidate_ruleset() -> None:
-    # R8-02/R8-07: use the dedicated GitHub App token with Administration:read so
-    # bypass actors and required-check integration binding are evaluated outside
-    # the candidate tree. Missing/unobservable fields fail closed.
+def verify_signed_ruleset_attestation(public_key: Path, live_ruleset: dict[str, object]) -> dict[str, object]:
+    if not RULESET_ATTESTATION.is_file() or not RULESET_ATTESTATION_SIG.is_file():
+        raise AssertionError("signed administrative ruleset evidence missing")
+    try:
+        signature = base64.b64decode(RULESET_ATTESTATION_SIG.read_text().strip(), validate=True)
+    except Exception as exc:
+        raise AssertionError("ruleset attestation signature is not valid base64") from exc
+    with tempfile.NamedTemporaryFile() as sig_file:
+        sig_file.write(signature)
+        sig_file.flush()
+        completed = subprocess.run(
+            [
+                "openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(public_key),
+                "-rawin", "-in", str(RULESET_ATTESTATION), "-sigfile", sig_file.name,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise AssertionError("administrative ruleset attestation signature verification failed")
+
+    attestation = json.loads(RULESET_ATTESTATION.read_text())
+    expected = {
+        "schema_version": 1,
+        "evidence_type": "GITHUB_RULESET_ADMINISTRATIVE_ATTESTATION",
+        "repository": TARGET_REPOSITORY,
+        "ruleset_id": EXPECTED_RULESET_ID,
+        "ruleset_name": EXPECTED_RULESET_NAME,
+        "target_ref": EXPECTED_RULESET_TARGET_REF,
+        "ruleset_updated_at": EXPECTED_RULESET_UPDATED_AT,
+        "bypass_actors": [],
+        "current_user_can_bypass": "never",
+        "required_external_check_context": EXPECTED_EXTERNAL_CHECK_CONTEXT,
+        "required_external_check_app_id": EXPECTED_EXTERNAL_CHECK_APP_ID,
+    }
+    assert_equal(attestation, expected, "signed administrative ruleset attestation")
+    assert_equal(live_ruleset.get("updated_at"), EXPECTED_RULESET_UPDATED_AT, "live ruleset update timestamp")
+    return attestation
+
+
+def verify_live_candidate_ruleset(public_key: Path) -> None:
+    # GitHub App Administration:read is used for the live ruleset. Some GitHub
+    # App responses omit bypass_actors/current_user_can_bypass even with that
+    # permission. Those fields therefore require a human-signed administrative
+    # attestation bound to the exact ruleset update timestamp. Any later ruleset
+    # mutation makes the attestation stale and fails closed.
     ruleset = github_json(
         f"https://api.github.com/repos/{TARGET_REPOSITORY}/rulesets/{EXPECTED_RULESET_ID}",
         require_app_token=True,
     )
+    attestation = verify_signed_ruleset_attestation(public_key, ruleset)
+
     assert_equal(ruleset.get("id"), EXPECTED_RULESET_ID, "ruleset id")
     assert_equal(ruleset.get("name"), EXPECTED_RULESET_NAME, "ruleset name")
     assert_equal(ruleset.get("target"), "branch", "ruleset target kind")
     assert_equal(ruleset.get("enforcement"), "active", "ruleset enforcement")
-    assert_equal(ruleset.get("bypass_actors"), [], "ruleset bypass actors")
-    if ruleset.get("current_user_can_bypass") not in ("never", False):
-        raise AssertionError("ruleset does not prove non-bypassable state")
+    if ruleset.get("bypass_actors") is not None:
+        assert_equal(ruleset.get("bypass_actors"), attestation["bypass_actors"], "ruleset bypass actors")
+    if ruleset.get("current_user_can_bypass") is not None:
+        assert_equal(ruleset.get("current_user_can_bypass"), attestation["current_user_can_bypass"], "ruleset current-user bypass")
 
     conditions = ruleset.get("conditions")
     if not isinstance(conditions, dict):
@@ -203,8 +255,11 @@ def verify_live_candidate_ruleset() -> None:
         [{"context": EXPECTED_EXTERNAL_CHECK_CONTEXT, "integration_id": EXPECTED_EXTERNAL_CHECK_APP_ID}],
         "dedicated external App source binding",
     )
-    if any(item.get("context") == EXPECTED_EXTERNAL_CHECK_CONTEXT and item.get("integration_id") == EXPECTED_GITHUB_ACTIONS_APP_ID
-           for item in checks if isinstance(item, dict)):
+    if any(
+        item.get("context") == EXPECTED_EXTERNAL_CHECK_CONTEXT
+        and item.get("integration_id") == EXPECTED_GITHUB_ACTIONS_APP_ID
+        for item in checks if isinstance(item, dict)
+    ):
         raise AssertionError("external governance context is incorrectly source-bound to GitHub Actions")
 
 
@@ -239,8 +294,8 @@ def falsify(repo: str, sha: str) -> dict[str, object]:
 
     with tempfile.TemporaryDirectory(prefix="setugo-governance-check-") as td:
         work = Path(td)
-        verify_live_external_root(work)
-        verify_live_candidate_ruleset()
+        public_key = verify_live_external_root(work)
+        verify_live_candidate_ruleset(public_key)
 
         root = work / "candidate"
         run(["git", "clone", "--no-checkout", f"https://github.com/{repo}.git", str(root)])
@@ -293,6 +348,7 @@ def falsify(repo: str, sha: str) -> dict[str, object]:
             "external_checker": True,
             "external_root_live_verified": True,
             "live_ruleset_source_binding_verified": True,
+            "ruleset_administrative_attestation_verified": True,
             "policy_blob_externally_pinned": EXPECTED_POLICY_BLOB_SHA,
             "manual_authority_verifier_blob_externally_pinned": EXPECTED_MANUAL_AUTHORITY_VERIFIER_BLOB_SHA,
             "policy_facade_blob_externally_pinned": EXPECTED_POLICY_FACADE_BLOB_SHA,
