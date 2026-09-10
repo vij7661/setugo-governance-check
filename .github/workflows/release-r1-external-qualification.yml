@@ -42,13 +42,13 @@ jobs:
           set -euo pipefail
           python checker/falsify_candidate_release_r1.py \
             --repo vij7661/setugo-ai-development-framework \
-            --sha 6d4fbb9ce266979ca3147a159ae724f33e0362ba | tee release-r3-result.txt
+            --sha b0b843356bb3d281e525284d85f79204ba9d4460 | tee release-r3-result.txt
 
       - name: Publish RELEASE qualification evidence check
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           STEP_OUTCOME: ${{ steps.qualify.outcome }}
-          SOURCE_SHA: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+          SOURCE_SHA: b0b843356bb3d281e525284d85f79204ba9d4460
           CHECKER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail

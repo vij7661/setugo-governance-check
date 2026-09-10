@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from urllib.request import Request, urlopen
 
 CANDIDATE_REPO = "vij7661/setugo-ai-development-framework"
-CANDIDATE_SHA = "6d4fbb9ce266979ca3147a159ae724f33e0362ba"
+CANDIDATE_SHA = "b0b843356bb3d281e525284d85f79204ba9d4460"
 PR_NUMBER = 37
 REQUIRED_BASE = "phase/release"
 
@@ -43,16 +43,9 @@ SOURCE_KIND = "MANUAL_GOVERNANCE_ATTESTATION"
 SCHEMA_VERSION = 1
 
 REQUIRED_FIELDS = frozenset({
-    "schema_version",
-    "candidate_sha",
-    "authority_class",
-    "decision_scope",
-    "evidence_ref",
-    "source_kind",
-    "qualification_policy_id",
-    "qualification_policy_version",
-    "qualification_policy_hash",
-    "trust_root_id",
+    "schema_version", "candidate_sha", "authority_class", "decision_scope",
+    "evidence_ref", "source_kind", "qualification_policy_id",
+    "qualification_policy_version", "qualification_policy_hash", "trust_root_id",
 })
 
 
@@ -65,11 +58,7 @@ def _canonical(value: Mapping[str, Any]) -> bytes:
 
 
 def _fetch_json(url: str) -> Mapping[str, Any]:
-    req = Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "setugo-release-merge-authority",
-    })
+    req = Request(url, headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "setugo-release-merge-authority"})
     try:
         with urlopen(req, timeout=15) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -107,50 +96,33 @@ def _root_public_key() -> bytes:
         raise ReleaseAuthorityError("release root repository identity mismatch")
     if repo.get("private") is not False or repo.get("archived") is not True:
         raise ReleaseAuthorityError("release root repository must be public and archived")
-
-    metadata_api = _fetch_json(
-        f"https://api.github.com/repos/{ROOT_REPO}/contents/{ROOT_METADATA_PATH}?ref={ROOT_COMMIT}"
-    )
+    metadata_api = _fetch_json(f"https://api.github.com/repos/{ROOT_REPO}/contents/{ROOT_METADATA_PATH}?ref={ROOT_COMMIT}")
     if metadata_api.get("sha") != ROOT_METADATA_BLOB:
         raise ReleaseAuthorityError("release root metadata blob mismatch")
-
     base = f"https://raw.githubusercontent.com/{ROOT_REPO}/{ROOT_COMMIT}"
     try:
         metadata = json.loads(_fetch_bytes(f"{base}/{ROOT_METADATA_PATH}").decode("utf-8"))
     except Exception as exc:
         raise ReleaseAuthorityError("release root metadata is malformed") from exc
     expected_metadata = {
-        "schema_version": 1,
-        "trust_root_id": TRUST_ROOT_ID,
-        "algorithm": "Ed25519",
-        "public_key_path": ROOT_PEM_PATH,
-        "public_key_der_sha256": ROOT_DER_SHA256,
+        "schema_version": 1, "trust_root_id": TRUST_ROOT_ID, "algorithm": "Ed25519",
+        "public_key_path": ROOT_PEM_PATH, "public_key_der_sha256": ROOT_DER_SHA256,
         "authority_scope": "RELEASE_TERMINAL_AUTHORITY_ATTESTATION_VERIFICATION_ONLY",
         "permitted_authority_class": AUTHORITY_CLASS,
-        "permitted_decision_scopes": [
-            "TERMINAL_ACTION:RELEASE:MERGE_RELEASE_CANDIDATE",
-            "TERMINAL_ACTION:RELEASE:BEGIN_PRODUCTION_QUALIFICATION",
-        ],
+        "permitted_decision_scopes": ["TERMINAL_ACTION:RELEASE:MERGE_RELEASE_CANDIDATE", "TERMINAL_ACTION:RELEASE:BEGIN_PRODUCTION_QUALIFICATION"],
         "private_key_location": "EXTERNAL_OFF_REPOSITORY_USER_CONTROLLED",
-        "private_key_must_never_be_committed": True,
-        "authority_effect": "NONE_BY_ITSELF",
+        "private_key_must_never_be_committed": True, "authority_effect": "NONE_BY_ITSELF",
     }
     if not isinstance(metadata, Mapping):
         raise ReleaseAuthorityError("release root metadata is not an object")
     for key, value in expected_metadata.items():
         if metadata.get(key) != value:
             raise ReleaseAuthorityError(f"release root metadata mismatch: {key}")
-
     pem = _fetch_bytes(f"{base}/{ROOT_PEM_PATH}")
     with tempfile.TemporaryDirectory(prefix="setugo-release-root-fingerprint-") as td:
-        root = Path(td)
-        pem_path = root / "root.pem"
-        der_path = root / "root.der"
+        root = Path(td); pem_path = root / "root.pem"; der_path = root / "root.der"
         pem_path.write_bytes(pem)
-        result = subprocess.run(
-            ["openssl", "pkey", "-pubin", "-in", str(pem_path), "-outform", "DER", "-out", str(der_path)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-        )
+        result = subprocess.run(["openssl", "pkey", "-pubin", "-in", str(pem_path), "-outform", "DER", "-out", str(der_path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if result.returncode != 0:
             raise ReleaseAuthorityError("release root PEM is invalid")
         if hashlib.sha256(der_path.read_bytes()).hexdigest() != ROOT_DER_SHA256:
@@ -162,8 +134,7 @@ def decode_attestation(attestation_b64: str) -> Mapping[str, Any]:
     if not isinstance(attestation_b64, str) or not attestation_b64:
         raise ReleaseAuthorityError("release authority attestation is missing")
     try:
-        raw = base64.b64decode(attestation_b64, validate=True)
-        payload = json.loads(raw.decode("utf-8"))
+        raw = base64.b64decode(attestation_b64, validate=True); payload = json.loads(raw.decode("utf-8"))
     except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ReleaseAuthorityError("release authority attestation is malformed") from exc
     if not isinstance(payload, Mapping):
@@ -176,14 +147,10 @@ def validate_attestation(attestation: Mapping[str, Any], candidate_sha: str) -> 
     if set(supplied) != REQUIRED_FIELDS:
         raise ReleaseAuthorityError("release authority attestation fields are missing or unexpected")
     expected = {
-        "schema_version": SCHEMA_VERSION,
-        "candidate_sha": candidate_sha,
-        "authority_class": AUTHORITY_CLASS,
-        "decision_scope": DECISION_SCOPE,
-        "source_kind": SOURCE_KIND,
-        "qualification_policy_id": POLICY_ID,
-        "qualification_policy_version": POLICY_VERSION,
-        "qualification_policy_hash": POLICY_HASH,
+        "schema_version": SCHEMA_VERSION, "candidate_sha": candidate_sha,
+        "authority_class": AUTHORITY_CLASS, "decision_scope": DECISION_SCOPE,
+        "source_kind": SOURCE_KIND, "qualification_policy_id": POLICY_ID,
+        "qualification_policy_version": POLICY_VERSION, "qualification_policy_hash": POLICY_HASH,
         "trust_root_id": TRUST_ROOT_ID,
     }
     for key, value in expected.items():
@@ -201,18 +168,9 @@ def verify_signature(attestation: Mapping[str, Any], signature_b64: str, public_
     if len(signature) != 64:
         raise ReleaseAuthorityError("release authority signature length is invalid")
     with tempfile.TemporaryDirectory(prefix="setugo-release-authority-") as td:
-        root = Path(td)
-        key_path = root / "public.pem"
-        payload_path = root / "attestation.json"
-        sig_path = root / "signature.bin"
-        key_path.write_bytes(public_key)
-        payload_path.write_bytes(_canonical(attestation))
-        sig_path.write_bytes(signature)
-        result = subprocess.run(
-            ["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(key_path),
-             "-rawin", "-in", str(payload_path), "-sigfile", str(sig_path)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-        )
+        root = Path(td); key_path = root / "public.pem"; payload_path = root / "attestation.json"; sig_path = root / "signature.bin"
+        key_path.write_bytes(public_key); payload_path.write_bytes(_canonical(attestation)); sig_path.write_bytes(signature)
+        result = subprocess.run(["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(key_path), "-rawin", "-in", str(payload_path), "-sigfile", str(sig_path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if result.returncode != 0:
             raise ReleaseAuthorityError("release authority Ed25519 signature is invalid")
 
@@ -229,30 +187,12 @@ def verify(candidate_sha: str, attestation_b64: str, signature_b64: str) -> Mapp
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--candidate", required=True)
-    parser.add_argument("--attestation-b64", default="")
-    parser.add_argument("--signature-b64", default="")
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument("--candidate", required=True); parser.add_argument("--attestation-b64", default=""); parser.add_argument("--signature-b64", default=""); args = parser.parse_args()
     try:
         attestation = verify(args.candidate, args.attestation_b64, args.signature_b64)
     except ReleaseAuthorityError as exc:
-        print(json.dumps({
-            "result": "REJECTED",
-            "candidate_sha": args.candidate,
-            "authority_effect": "NONE",
-            "reason": str(exc),
-        }, sort_keys=True))
-        return 1
-    print(json.dumps({
-        "result": "VERIFIED",
-        "candidate_sha": args.candidate,
-        "authority_class": attestation["authority_class"],
-        "decision_scope": attestation["decision_scope"],
-        "evidence_ref": attestation["evidence_ref"],
-        "authority_effect": "MERGE_RELEASE_CANDIDATE_ONLY",
-    }, sort_keys=True))
-    return 0
+        print(json.dumps({"result": "REJECTED", "candidate_sha": args.candidate, "authority_effect": "NONE", "reason": str(exc)}, sort_keys=True)); return 1
+    print(json.dumps({"result": "VERIFIED", "candidate_sha": args.candidate, "authority_class": attestation["authority_class"], "decision_scope": attestation["decision_scope"], "evidence_ref": attestation["evidence_ref"], "authority_effect": "MERGE_RELEASE_CANDIDATE_ONLY"}, sort_keys=True)); return 0
 
 
 if __name__ == "__main__":
