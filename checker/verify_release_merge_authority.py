@@ -3,8 +3,9 @@
 
 This module is checker-owned. It never executes candidate code. A successful
 result means a human-signed RELEASE authority attestation is cryptographically
-valid for the exact frozen candidate and current RELEASE policy binding.
-The result itself does not mint authority.
+valid for the exact frozen candidate, current RELEASE policy binding, and the
+exact independently verified RELEASE adjudication digest. The result itself
+does not mint authority.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import binascii
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from typing import Any, Mapping
@@ -41,6 +43,7 @@ AUTHORITY_CLASS = "HUMAN_RELEASE_AUTHORITY"
 DECISION_SCOPE = "TERMINAL_ACTION:RELEASE:MERGE_RELEASE_CANDIDATE"
 SOURCE_KIND = "MANUAL_GOVERNANCE_ATTESTATION"
 SCHEMA_VERSION = 1
+ADJUDICATION_REF_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 REQUIRED_FIELDS = frozenset({
     "schema_version", "candidate_sha", "authority_class", "decision_scope",
@@ -142,7 +145,7 @@ def decode_attestation(attestation_b64: str) -> Mapping[str, Any]:
     return payload
 
 
-def validate_attestation(attestation: Mapping[str, Any], candidate_sha: str) -> None:
+def validate_attestation(attestation: Mapping[str, Any], candidate_sha: str, adjudication_evidence_ref: str) -> None:
     supplied = dict(attestation)
     if set(supplied) != REQUIRED_FIELDS:
         raise ReleaseAuthorityError("release authority attestation fields are missing or unexpected")
@@ -156,8 +159,10 @@ def validate_attestation(attestation: Mapping[str, Any], candidate_sha: str) -> 
     for key, value in expected.items():
         if supplied.get(key) != value:
             raise ReleaseAuthorityError(f"release authority attestation mismatch: {key}")
-    if not isinstance(supplied.get("evidence_ref"), str) or not supplied["evidence_ref"]:
-        raise ReleaseAuthorityError("release authority evidence reference is missing")
+    if not isinstance(adjudication_evidence_ref, str) or ADJUDICATION_REF_RE.fullmatch(adjudication_evidence_ref) is None:
+        raise ReleaseAuthorityError("verified independent adjudication digest is missing or invalid")
+    if supplied.get("evidence_ref") != adjudication_evidence_ref:
+        raise ReleaseAuthorityError("release authority evidence_ref is not bound to the verified independent adjudication digest")
 
 
 def verify_signature(attestation: Mapping[str, Any], signature_b64: str, public_key: bytes) -> None:
@@ -175,21 +180,28 @@ def verify_signature(attestation: Mapping[str, Any], signature_b64: str, public_
             raise ReleaseAuthorityError("release authority Ed25519 signature is invalid")
 
 
-def verify(candidate_sha: str, attestation_b64: str, signature_b64: str) -> Mapping[str, Any]:
+def verify(candidate_sha: str, attestation_b64: str, signature_b64: str, adjudication_evidence_ref: str) -> Mapping[str, Any]:
     if candidate_sha != CANDIDATE_SHA:
         raise ReleaseAuthorityError("requested SHA is not the frozen RELEASE R3 candidate")
+    if not isinstance(adjudication_evidence_ref, str) or ADJUDICATION_REF_RE.fullmatch(adjudication_evidence_ref) is None:
+        raise ReleaseAuthorityError("verified independent adjudication digest is missing or invalid")
     verify_pr_binding(candidate_sha)
     attestation = decode_attestation(attestation_b64)
-    validate_attestation(attestation, candidate_sha)
+    validate_attestation(attestation, candidate_sha, adjudication_evidence_ref)
     public_key = _root_public_key()
     verify_signature(attestation, signature_b64, public_key)
     return attestation
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(); parser.add_argument("--candidate", required=True); parser.add_argument("--attestation-b64", default=""); parser.add_argument("--signature-b64", default=""); args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--candidate", required=True)
+    parser.add_argument("--attestation-b64", default="")
+    parser.add_argument("--signature-b64", default="")
+    parser.add_argument("--adjudication-evidence-ref", default="")
+    args = parser.parse_args()
     try:
-        attestation = verify(args.candidate, args.attestation_b64, args.signature_b64)
+        attestation = verify(args.candidate, args.attestation_b64, args.signature_b64, args.adjudication_evidence_ref)
     except ReleaseAuthorityError as exc:
         print(json.dumps({"result": "REJECTED", "candidate_sha": args.candidate, "authority_effect": "NONE", "reason": str(exc)}, sort_keys=True)); return 1
     print(json.dumps({"result": "VERIFIED", "candidate_sha": args.candidate, "authority_class": attestation["authority_class"], "decision_scope": attestation["decision_scope"], "evidence_ref": attestation["evidence_ref"], "authority_effect": "MERGE_RELEASE_CANDIDATE_ONLY"}, sort_keys=True)); return 0
