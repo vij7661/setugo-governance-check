@@ -1,25 +1,17 @@
 #!/usr/bin/env python3
-"""Checker-owned isolated runner for candidate qualification tests.
+"""Checker-owned isolated runner for pinned candidate qualification tests.
 
-This file executes under `python -I`. It imports trusted stdlib machinery before
-adding the candidate runtime at the END of sys.path, so candidate files cannot
-shadow the test runner or standard-library modules through cwd/sys.path[0].
-
-The candidate qualification corpus intentionally mixes unittest.TestCase tests
-with top-level zero-argument `test_*` functions. Because every selected module is
-independently Git-blob pinned by the external checker, this runner can execute
-both shapes without delegating collection to candidate-controlled pytest hooks,
-plugins, or conftest files.
+Runs under `python -I`, imports trusted stdlib machinery before candidate runtime,
+appends the candidate runtime last, explicitly loads only caller-selected `.py`
+modules, and supports only unittest.TestCase plus synchronous zero-argument top-
+level `test_*` functions. Unsupported async/generator shapes fail closed.
 
 Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
-import hashlib  # preload from trusted stdlib search path
 import importlib
 import inspect
-import json
-import os
 from pathlib import Path
 import sys
 import unittest
@@ -33,6 +25,18 @@ def _is_under(path: Path, parent: Path) -> bool:
         return False
 
 
+def _assert_candidate_last(runtime: Path) -> None:
+    resolved = []
+    for item in sys.path:
+        try:
+            resolved.append(Path(item).resolve())
+        except (OSError, RuntimeError):
+            continue
+    positions = [i for i, value in enumerate(resolved) if value == runtime]
+    if positions != [len(resolved) - 1]:
+        raise SystemExit("candidate runtime import precedence changed or duplicated")
+
+
 def _top_level_tests(module):
     tests = []
     for name, value in vars(module).items():
@@ -40,6 +44,12 @@ def _top_level_tests(module):
             continue
         if getattr(value, "__module__", None) != module.__name__:
             continue
+        if inspect.iscoroutinefunction(value):
+            raise SystemExit(f"unsupported async qualification test: {module.__name__}.{name}")
+        if inspect.isasyncgenfunction(value):
+            raise SystemExit(f"unsupported async-generator qualification test: {module.__name__}.{name}")
+        if inspect.isgeneratorfunction(value):
+            raise SystemExit(f"unsupported generator qualification test: {module.__name__}.{name}")
         signature = inspect.signature(value)
         required = [
             parameter
@@ -69,8 +79,9 @@ def main() -> int:
     selected = list(sys.argv[2:])
     if not runtime.is_dir():
         raise SystemExit("candidate runtime directory missing")
+    if len(selected) != len(set(selected)):
+        raise SystemExit("duplicate qualification test module requested")
 
-    # `-I` must be active; user-site and Python environment injection must be off.
     if sys.flags.isolated != 1 or sys.flags.no_user_site != 1 or sys.flags.ignore_environment != 1:
         raise SystemExit("candidate qualification interpreter is not isolated")
 
@@ -78,8 +89,7 @@ def main() -> int:
     if _is_under(unittest_origin, runtime):
         raise SystemExit("candidate-controlled unittest shadow detected")
 
-    # Candidate code must not have import precedence while the trusted collector
-    # and stdlib are imported. Add candidate runtime only after that boundary.
+    # Candidate runtime may not already have precedence. Add it exactly once and last.
     for item in sys.path:
         try:
             if Path(item).resolve() == runtime:
@@ -87,6 +97,7 @@ def main() -> int:
         except (OSError, RuntimeError):
             pass
     sys.path.append(str(runtime))
+    _assert_candidate_last(runtime)
 
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -94,16 +105,26 @@ def main() -> int:
     plain_functions = []
 
     for filename in selected:
-        if not filename.endswith(".py"):
-            raise SystemExit(f"qualification test must be an explicit .py module: {filename}")
+        if not filename.endswith(".py") or "/" in filename or "\\" in filename:
+            raise SystemExit(f"qualification test must be an explicit top-level .py module: {filename}")
         module_name = filename[:-3]
+        before_errors = len(loader.errors)
         try:
             module = importlib.import_module(module_name)
         except Exception as exc:
             raise SystemExit(f"failed to import qualification test module {module_name}: {exc}") from exc
+        _assert_candidate_last(runtime)
+
+        origin = getattr(module, "__file__", None)
+        expected_origin = (runtime / filename).resolve()
+        if origin is None or Path(origin).resolve() != expected_origin:
+            raise SystemExit(
+                f"qualification test module resolved outside candidate runtime: "
+                f"{module_name} -> {origin!r}"
+            )
 
         loaded = loader.loadTestsFromModule(module)
-        if loader.errors:
+        if len(loader.errors) != before_errors:
             raise SystemExit(f"unittest loader error for {module_name}: {loader.errors[-1]}")
         unittest_count = loaded.countTestCases()
         top_level = _top_level_tests(module)
@@ -118,33 +139,23 @@ def main() -> int:
             "top_level_functions": top_level_count,
         }
 
-    unittest_total = suite.countTestCases()
-    top_level_total = len(plain_functions)
-    total = unittest_total + top_level_total
-    if total <= 0:
+    if suite.countTestCases() + len(plain_functions) <= 0:
         raise SystemExit("qualification corpus executed zero tests")
-
-    print(json.dumps({
-        "isolated": True,
-        "no_user_site": bool(sys.flags.no_user_site),
-        "ignore_environment": bool(sys.flags.ignore_environment),
-        "unittest_origin": str(unittest_origin),
-        "candidate_runtime_appended_last": sys.path[-1] == str(runtime),
-        "module_test_counts": module_counts,
-        "unittest_total": unittest_total,
-        "top_level_total": top_level_total,
-        "total_tests": total,
-        "collector": "CHECKER_OWNED_UNITTEST_PLUS_ZERO_ARG_TOP_LEVEL",
-        "authority_effect": "NONE_EVIDENCE_ONLY",
-    }, sort_keys=True))
 
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful():
         return 1
 
     for module_name, name, function in plain_functions:
+        _assert_candidate_last(runtime)
         print(f"RUN {module_name}.{name}")
-        function()
+        value = function()
+        if inspect.isawaitable(value):
+            raise SystemExit(f"qualification test returned awaitable without execution: {module_name}.{name}")
+        if inspect.isgenerator(value):
+            raise SystemExit(f"qualification test returned generator without execution: {module_name}.{name}")
+        if inspect.isasyncgen(value):
+            raise SystemExit(f"qualification test returned async generator without execution: {module_name}.{name}")
         print(f"PASS {module_name}.{name}")
 
     return 0

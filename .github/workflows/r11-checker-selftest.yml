@@ -1,0 +1,29 @@
+name: R11 Checker Harness Selftest
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout external checker
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate exact checker checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          printf 'checker_sha=%s\n' "$GITHUB_SHA"
+
+      - name: Run R11 checker-owned harness falsification tests
+        run: python -m unittest -v checker/test_r11_harness.py
