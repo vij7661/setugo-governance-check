@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import unittest
+from unittest import mock
 
 import verify_release_review_adjudication as gate
 
 
 class ReleaseReviewAdjudicationTests(unittest.TestCase):
     def _valid(self):
+        review_bytes = b"independent review bytes\n"
         return {
             "schema_version": 1,
             "candidate_repository": gate.CANDIDATE_REPO,
@@ -19,8 +22,8 @@ class ReleaseReviewAdjudicationTests(unittest.TestCase):
             "decision_scope": gate.DECISION_SCOPE,
             "disposition": gate.ELIGIBLE_DISPOSITION,
             "source_kind": gate.SOURCE_KIND,
-            "raw_review_ref": "manual-review:example",
-            "raw_review_sha256": "a" * 64,
+            "raw_review_ref": "https://raw.githubusercontent.com/vij7661/setugo-governance-check/" + ("a" * 40) + "/evidence/manual-reviews/release-r1-independent-review.md",
+            "raw_review_sha256": hashlib.sha256(review_bytes).hexdigest(),
             "reviewed_checker_sha": gate.QUALIFICATION_CHECKER_SHA,
             "qualification_policy_id": gate.POLICY_ID,
             "qualification_policy_version": gate.POLICY_VERSION,
@@ -60,13 +63,41 @@ class ReleaseReviewAdjudicationTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.ReleaseReviewError, "mismatch: reviewed_checker_sha"):
             gate.validate_artifact(value)
 
-    def test_raw_review_reference_and_digest_are_mandatory(self):
-        value = self._valid(); value["raw_review_ref"] = ""
-        with self.assertRaisesRegex(gate.ReleaseReviewError, "reference is missing"):
-            gate.validate_artifact(value)
+    def test_raw_review_reference_must_be_immutable_checker_owned_url(self):
+        for bad in (
+            "",
+            "manual-review:example",
+            "https://example.com/review.md",
+            "https://raw.githubusercontent.com/vij7661/setugo-ai-development-framework/" + ("a" * 40) + "/evidence/manual-reviews/review.md",
+            "https://raw.githubusercontent.com/vij7661/setugo-governance-check/main/evidence/manual-reviews/review.md",
+        ):
+            with self.subTest(raw_review_ref=bad):
+                value = self._valid(); value["raw_review_ref"] = bad
+                with self.assertRaisesRegex(gate.ReleaseReviewError, "immutable checker-owned review URL"):
+                    gate.validate_artifact(value)
+
+    def test_raw_review_digest_format_is_mandatory(self):
         value = self._valid(); value["raw_review_sha256"] = "not-a-digest"
         with self.assertRaisesRegex(gate.ReleaseReviewError, "SHA-256 is invalid"):
             gate.validate_artifact(value)
+
+    def test_raw_review_bytes_are_rehashed_and_must_match(self):
+        value = self._valid()
+        commit = "a" * 40
+        with mock.patch.object(gate, "_fetch_json", return_value={"sha": commit}), \
+             mock.patch.object(gate, "_fetch_bytes", return_value=b"independent review bytes\n"):
+            gate.verify_raw_review_binding(value)
+
+        with mock.patch.object(gate, "_fetch_json", return_value={"sha": commit}), \
+             mock.patch.object(gate, "_fetch_bytes", return_value=b"self-authored replacement\n"):
+            with self.assertRaisesRegex(gate.ReleaseReviewError, "does not match referenced review bytes"):
+                gate.verify_raw_review_binding(value)
+
+    def test_raw_review_commit_identity_must_resolve_exactly(self):
+        value = self._valid()
+        with mock.patch.object(gate, "_fetch_json", return_value={"sha": "b" * 40}):
+            with self.assertRaisesRegex(gate.ReleaseReviewError, "commit identity mismatch"):
+                gate.verify_raw_review_binding(value)
 
     def test_unknown_fields_are_rejected(self):
         value = copy.deepcopy(self._valid()); value["self_declared_independent"] = True

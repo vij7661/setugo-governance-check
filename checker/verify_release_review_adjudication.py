@@ -3,7 +3,7 @@
 
 A verified adjudication is evidence only. It does not grant RELEASE terminal
 authority. The adjudication must be signed by the independent governance
-adjudicator trust root and must itself bind the raw review digest, candidate,
+adjudicator trust root and must itself bind the raw review bytes, candidate,
 frozen qualification checker, PR, policy, and PASS disposition.
 
 `reviewed_checker_sha` intentionally identifies the checker revision whose
@@ -41,6 +41,14 @@ ROOT_PEM_PATH = f"trust-roots/{TRUST_ROOT_ID}.pem"
 ROOT_METADATA_BLOB = "882178e631b98903de872c04aaa23c67b80a75ed"
 ROOT_DER_SHA256 = "2b1b97ab0bf99e71f4a93f51fd8e6c3eb30063d83ba2eb4c091492a95f9c11f2"
 
+RAW_REVIEW_REPO = "vij7661/setugo-governance-check"
+RAW_REVIEW_PATH_PREFIX = "evidence/manual-reviews/"
+RAW_REVIEW_REF_RE = re.compile(
+    r"^https://raw\.githubusercontent\.com/vij7661/setugo-governance-check/"
+    r"(?P<commit>[0-9a-f]{40})/evidence/manual-reviews/"
+    r"(?P<filename>[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.md)$"
+)
+
 SCHEMA_VERSION = 1
 REVIEW_TYPE = "INDEPENDENT_RELEASE_ADJUDICATION"
 AUTHORITY_CLASS = "INDEPENDENT_GOVERNANCE_ADJUDICATOR"
@@ -76,9 +84,9 @@ def _fetch_json(url: str) -> Mapping[str, Any]:
         with urlopen(req, timeout=15) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        raise ReleaseReviewError(f"unable to fetch adjudication trust metadata: {type(exc).__name__}") from exc
+        raise ReleaseReviewError(f"unable to fetch adjudication JSON evidence: {type(exc).__name__}") from exc
     if not isinstance(payload, Mapping):
-        raise ReleaseReviewError("adjudication trust metadata is not an object")
+        raise ReleaseReviewError("adjudication JSON evidence is not an object")
     return payload
 
 
@@ -88,7 +96,7 @@ def _fetch_bytes(url: str) -> bytes:
         with urlopen(req, timeout=15) as response:
             return response.read()
     except Exception as exc:
-        raise ReleaseReviewError(f"unable to fetch adjudication trust material: {type(exc).__name__}") from exc
+        raise ReleaseReviewError(f"unable to fetch adjudication byte evidence: {type(exc).__name__}") from exc
 
 
 def _root_public_key() -> bytes:
@@ -163,11 +171,27 @@ def validate_artifact(artifact: Mapping[str, Any]) -> None:
     for key, value in expected.items():
         if supplied.get(key) != value:
             raise ReleaseReviewError(f"independent RELEASE adjudication mismatch: {key}")
-    if not isinstance(supplied.get("raw_review_ref"), str) or not supplied["raw_review_ref"].strip():
-        raise ReleaseReviewError("raw independent review reference is missing")
+    raw_ref = supplied.get("raw_review_ref")
+    if not isinstance(raw_ref, str) or RAW_REVIEW_REF_RE.fullmatch(raw_ref) is None:
+        raise ReleaseReviewError("raw independent review reference is not an immutable checker-owned review URL")
     raw_hash = supplied.get("raw_review_sha256")
     if not isinstance(raw_hash, str) or SHA256_RE.fullmatch(raw_hash) is None:
         raise ReleaseReviewError("raw independent review SHA-256 is invalid")
+
+
+def verify_raw_review_binding(artifact: Mapping[str, Any]) -> None:
+    raw_ref = str(artifact["raw_review_ref"])
+    match = RAW_REVIEW_REF_RE.fullmatch(raw_ref)
+    if match is None:
+        raise ReleaseReviewError("raw independent review reference is not an immutable checker-owned review URL")
+    commit = match.group("commit")
+    commit_api = _fetch_json(f"https://api.github.com/repos/{RAW_REVIEW_REPO}/commits/{commit}")
+    if commit_api.get("sha") != commit:
+        raise ReleaseReviewError("raw independent review commit identity mismatch")
+    raw_review = _fetch_bytes(raw_ref)
+    actual = hashlib.sha256(raw_review).hexdigest()
+    if actual != artifact.get("raw_review_sha256"):
+        raise ReleaseReviewError("raw independent review SHA-256 does not match referenced review bytes")
 
 
 def verify_signature(artifact: Mapping[str, Any], signature_b64: str, public_key: bytes) -> None:
@@ -188,6 +212,7 @@ def verify_signature(artifact: Mapping[str, Any], signature_b64: str, public_key
 def verify(artifact_b64: str, signature_b64: str) -> Mapping[str, Any]:
     artifact = decode_artifact(artifact_b64)
     validate_artifact(artifact)
+    verify_raw_review_binding(artifact)
     verify_signature(artifact, signature_b64, _root_public_key())
     return artifact
 
