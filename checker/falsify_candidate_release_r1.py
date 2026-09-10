@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""RELEASE R1 external qualification extension.
+"""RELEASE R1/R3 external qualification extension.
 
-Extends the R11 external checker for the exact RELEASE hardening candidate,
-pins the repaired bridge plus RELEASE shape-guard regression, and independently
-executes the two candidate-side paths carried forward as REL-R1-03.
-Authority effect: NONE_EVIDENCE_ONLY.
+Extends the R11 external checker for the exact RELEASE successor, pins the
+repaired bridge plus RELEASE shape-guard regression, and independently executes
+candidate-side qualification paths. Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ import tempfile
 
 import falsify_candidate_r10_entry as r10
 
-RELEASE_CANDIDATE_SHA = "ffec566022fcd221fb4ab7569ed3bc245f75b546"
+RELEASE_CANDIDATE_SHA = "6d4fbb9ce266979ca3147a159ae724f33e0362ba"
 CANDIDATE_REPO = "https://github.com/vij7661/setugo-ai-development-framework.git"
 
 RELEASE_TEST_BLOBS = {
@@ -157,7 +156,7 @@ def main() -> int:
     if result not in (None, 0):
         return int(result)
     verify_and_execute_extra_release_paths()
-    print(f"RELEASE_R1_EXTERNAL_COVERAGE_PASS candidate_sha={RELEASE_CANDIDATE_SHA}")
+    print(f"RELEASE_EXTERNAL_COVERAGE_PASS candidate_sha={RELEASE_CANDIDATE_SHA}")
     return 0
 
 
