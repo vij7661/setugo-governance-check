@@ -32,7 +32,7 @@ jobs:
           owner: vij7661
           repositories: setugo-ai-development-framework
 
-      - name: Execute RELEASE R1 external qualification
+      - name: Execute RELEASE R3 successor external qualification
         id: qualify
         continue-on-error: true
         env:
@@ -42,24 +42,24 @@ jobs:
           set -euo pipefail
           python checker/falsify_candidate_release_r1.py \
             --repo vij7661/setugo-ai-development-framework \
-            --sha ffec566022fcd221fb4ab7569ed3bc245f75b546 | tee release-r1-result.txt
+            --sha 6d4fbb9ce266979ca3147a159ae724f33e0362ba | tee release-r3-result.txt
 
       - name: Publish RELEASE qualification evidence check
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           STEP_OUTCOME: ${{ steps.qualify.outcome }}
-          SOURCE_SHA: ffec566022fcd221fb4ab7569ed3bc245f75b546
+          SOURCE_SHA: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
           CHECKER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [[ "$STEP_OUTCOME" == success ]]; then
             CONCLUSION=success
-            TITLE='External RELEASE R1 qualification passed (evidence only)'
-            SUMMARY="Checker ${CHECKER_SHA} satisfied frozen RELEASE R1 external coverage for ${SOURCE_SHA}. Evidence only; no RELEASE terminal authority."
+            TITLE='External RELEASE qualification passed (evidence only)'
+            SUMMARY="Checker ${CHECKER_SHA} satisfied frozen RELEASE external coverage for ${SOURCE_SHA}. Evidence only; no RELEASE terminal authority."
           else
             CONCLUSION=failure
-            TITLE='External RELEASE R1 qualification failed closed'
-            SUMMARY="Checker ${CHECKER_SHA} rejected RELEASE R1 candidate ${SOURCE_SHA}."
+            TITLE='External RELEASE qualification failed closed'
+            SUMMARY="Checker ${CHECKER_SHA} rejected RELEASE candidate ${SOURCE_SHA}."
           fi
           jq -n \
             --arg name 'external-release-qualification' \
@@ -81,7 +81,7 @@ jobs:
           test "$(jq -r '.app.id' published-check.json)" = '4895420'
           test "$(jq -r '.name' published-check.json)" = 'external-release-qualification'
 
-      - name: Require frozen RELEASE R1 success
+      - name: Require frozen RELEASE successor success
         env:
           STEP_OUTCOME: ${{ steps.qualify.outcome }}
         run: |
