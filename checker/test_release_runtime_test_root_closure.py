@@ -34,6 +34,17 @@ class ReleaseRuntimeTestRootClosureTests(unittest.TestCase):
         ).strip().split()
         return out[2]
 
+    def test_default_has_no_hidden_qualification_test_roots(self):
+        td, repo = self._repo({"core.py": "VALUE = 1\n"})
+        try:
+            pinned = {"core.py": self._blob(repo, "core.py")}
+            with mock.patch.object(gate, "PINNED_RUNTIME_BLOBS", pinned), \
+                 mock.patch.object(gate, "ENTRY_POINTS", frozenset(pinned)):
+                graph = gate.verify_repo(repo)
+                self.assertNotIn("TEST:test_entry.py", graph)
+        finally:
+            td.cleanup()
+
     def test_unpinned_helper_imported_only_by_pinned_test_fails_closed(self):
         td, repo = self._repo({
             "core.py": "VALUE = 1\n",
@@ -43,10 +54,9 @@ class ReleaseRuntimeTestRootClosureTests(unittest.TestCase):
         try:
             pinned = {"core.py": self._blob(repo, "core.py")}
             with mock.patch.object(gate, "PINNED_RUNTIME_BLOBS", pinned), \
-                 mock.patch.object(gate, "ENTRY_POINTS", frozenset(pinned)), \
-                 mock.patch.object(gate, "QUALIFICATION_TEST_FILES", frozenset({"test_entry.py"})):
+                 mock.patch.object(gate, "ENTRY_POINTS", frozenset(pinned)):
                 with self.assertRaisesRegex(AssertionError, "TEST:test_entry.py -> helper.py"):
-                    gate.verify_repo(repo)
+                    gate.verify_repo(repo, qualification_test_files={"test_entry.py"})
         finally:
             td.cleanup()
 
@@ -62,10 +72,20 @@ class ReleaseRuntimeTestRootClosureTests(unittest.TestCase):
                 "helper.py": self._blob(repo, "helper.py"),
             }
             with mock.patch.object(gate, "PINNED_RUNTIME_BLOBS", pinned), \
-                 mock.patch.object(gate, "ENTRY_POINTS", frozenset(pinned)), \
-                 mock.patch.object(gate, "QUALIFICATION_TEST_FILES", frozenset({"test_entry.py"})):
-                graph = gate.verify_repo(repo)
+                 mock.patch.object(gate, "ENTRY_POINTS", frozenset(pinned)):
+                graph = gate.verify_repo(repo, qualification_test_files={"test_entry.py"})
                 self.assertEqual(["helper.py"], graph["TEST:test_entry.py"])
+        finally:
+            td.cleanup()
+
+    def test_invalid_test_root_fails_closed(self):
+        td, repo = self._repo({"core.py": "VALUE = 1\n"})
+        try:
+            pinned = {"core.py": self._blob(repo, "core.py")}
+            with mock.patch.object(gate, "PINNED_RUNTIME_BLOBS", pinned), \
+                 mock.patch.object(gate, "ENTRY_POINTS", frozenset(pinned)):
+                with self.assertRaisesRegex(AssertionError, "invalid qualification test closure root"):
+                    gate.verify_repo(repo, qualification_test_files={"helper.py"})
         finally:
             td.cleanup()
 
