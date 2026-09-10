@@ -25,10 +25,25 @@ release.RELEASE_REQUIRED_CHECKS = frozenset(
     set(release.RELEASE_REQUIRED_CHECKS) | {REQUIRED_REVIEW_ADJUDICATION_CHECK}
 )
 runtime_closure.CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
-# The shared isolated runner is generic. RELEASE supplies the exact checker-owned
-# runtime map explicitly so every candidate-local module actually imported while
-# qualification tests execute must be present in this exact pin set.
-release.r10.RUNTIME_PINNED_BLOBS = dict(runtime_closure.PINNED_RUNTIME_BLOBS)
+
+# The runtime execution guard must cover every exact-pinned candidate-local file
+# that can legitimately execute during qualification, regardless of whether it
+# belongs to the static runtime import-closure set or the separately pinned
+# extra-execution set. Derive this map from the authoritative checker pin sets;
+# never maintain a third handwritten allowlist.
+_runtime_execution_pins = dict(runtime_closure.PINNED_RUNTIME_BLOBS)
+for relpath, blob in release.EXTRA_EXECUTION_BLOBS.items():
+    prefix = "governance-runtime/"
+    if relpath.startswith(prefix):
+        runtime_relpath = relpath[len(prefix):]
+        existing = _runtime_execution_pins.get(runtime_relpath)
+        if existing is not None and existing != blob:
+            raise RuntimeError(
+                f"conflicting runtime pin for {runtime_relpath}: {existing} != {blob}"
+            )
+        _runtime_execution_pins[runtime_relpath] = blob
+
+release.r10.RUNTIME_PINNED_BLOBS = _runtime_execution_pins
 
 _original_extra_release_paths = release.verify_and_execute_extra_release_paths
 
