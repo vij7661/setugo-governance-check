@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - 'checker/verify_release_merge_authority.py'
+      - 'checker/verify_release_merge_authority_current.py'
       - 'checker/test_release_merge_authority_gate.py'
       - '.github/workflows/release-r3-merge-authority-selftest.yml'
 
@@ -37,8 +38,8 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          python verify_release_merge_authority.py \
-            --candidate 82782136fcbff465cddaf7b9832eafd2283fd892 \
+          python verify_release_merge_authority_current.py \
+            --candidate 4200397f21e12f900c309ee1bc66fa8424135f11 \
             > absent-authority.json
           rc=$?
           set -e
