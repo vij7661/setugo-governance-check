@@ -3,7 +3,7 @@ name: RELEASE R1 External Qualification
 on:
   push:
     branches:
-      - release/r1-external-coverage
+      - main
 
 permissions:
   contents: read
@@ -13,12 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: governance-app-publisher
     steps:
-      - name: Checkout exact checker candidate
+      - name: Checkout exact checker
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Validate checker candidate revision
+      - name: Validate protected checker revision
         run: |
           set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           printf 'checker_sha=%s\n' "$GITHUB_SHA"
 
