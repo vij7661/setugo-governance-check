@@ -1,0 +1,151 @@
+name: Package R9 successor review af3b21fc
+
+on:
+  push:
+    branches:
+      - package/review-af3b21fc
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    if: ${{ !contains(github.event.head_commit.message, '[packet-generated]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout packaging branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+
+      - name: Build exact review packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_SHA='af3b21fc568480b295ee49a6c7a2dd2b76650b89'
+          CHECKER_SHA='af3fb7b453c8e7b0a034cf0be90524e65f6a52fc'
+          ROOT_SHA='5f470774ec8c17f5519da8db2aaae59af114cef9'
+          OUT='TESTING-QUALIFICATION-R9-REVIEW-af3b21fc-DEEPSEEK.txt'
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+
+          git clone -q https://github.com/vij7661/setugo-ai-development-framework.git "$TMP/candidate"
+          git -C "$TMP/candidate" checkout -q "$CANDIDATE_SHA"
+          git clone -q https://github.com/vij7661/setugo-governance-check.git "$TMP/checker"
+          git -C "$TMP/checker" checkout -q "$CHECKER_SHA"
+          git clone -q https://github.com/vij7661/setugo-governance-root.git "$TMP/root"
+          git -C "$TMP/root" checkout -q "$ROOT_SHA"
+
+          {
+            echo 'INDEPENDENT FALSIFICATION REVIEW REQUEST — R9 SUCCESSOR'
+            echo
+            echo 'Authority effect: NONE_EVIDENCE_ONLY.'
+            echo 'Assume false-green until proven otherwise.'
+            echo
+            echo "Exact candidate SHA: $CANDIDATE_SHA"
+            echo "Exact external checker SHA: $CHECKER_SHA"
+            echo "Exact external governance root SHA: $ROOT_SHA"
+            echo 'External checker run: 34475151046'
+            echo 'External App check run: 102864110780'
+            echo
+            echo 'Required review:'
+            echo '1. Re-falsify R8-01 through R8-07 and R9-01/R9-02 against this exact successor.'
+            echo '2. Verify R8-06 successor-lineage closure: 61e98ba0... is the exposed subject; af3b21fc... is the distinct merged successor.'
+            echo '3. Verify candidate-test-harness substitution is fail-closed under externally pinned candidate test blobs.'
+            echo '4. Search for any new material false-green path, especially dependency-closure gaps, checker-revision/use-time binding, ruleset/App source binding, stale evidence replay, candidate-controlled test or import surfaces, and authority self-grant.'
+            echo '5. Treat all CI, check-runs, signatures, and reviewer/model outputs as evidence only, never authority.'
+            echo '6. Do not grant TESTING/RELEASE/PRODUCTION authority.'
+            echo
+            echo 'Return one final disposition: TESTING_RULES_PASS, TESTING_RULES_BOUNDED_PASS, CHANGES_REQUIRED, or INSUFFICIENT_EVIDENCE.'
+            echo 'For every finding give exact failure path, severity, and whether it is blocking in TESTING.'
+            echo
+          } > "$OUT"
+
+          append_file() {
+            local repo_label="$1" root="$2" rel="$3"
+            if [[ ! -f "$root/$rel" ]]; then return 0; fi
+            local bytes sha
+            bytes="$(wc -c < "$root/$rel" | tr -d ' ')"
+            sha="$(sha256sum "$root/$rel" | awk '{print $1}')"
+            {
+              echo
+              echo '================================================================'
+              echo "BEGIN FILE: $repo_label/$rel"
+              echo "BYTES: $bytes"
+              echo "SHA256: $sha"
+              echo '----------------------------------------------------------------'
+              cat "$root/$rel"
+              echo
+              echo "END FILE: $repo_label/$rel"
+              echo '================================================================'
+            } >> "$OUT"
+          }
+
+          # Candidate authority-critical runtime and workflow.
+          for f in \
+            governance-runtime/qualification_boundary_policy_v4.py \
+            governance-runtime/qualification_boundary_policy.py \
+            governance-runtime/manual_authority_verifier.py \
+            governance-runtime/external_governance_root.py \
+            governance-runtime/verify_external_trust_root_control.py \
+            .github/workflows/testing-qualification-boundary-ownership.yml \
+            standards/qualification-boundary-ownership.md; do
+            append_file CANDIDATE "$TMP/candidate" "$f"
+          done
+
+          # All candidate test modules, so qualification-contributing tests are independently inspectable.
+          while IFS= read -r f; do append_file CANDIDATE "$TMP/candidate" "$f"; done < <(cd "$TMP/candidate" && find governance-runtime -maxdepth 1 -type f -name 'test_*.py' -printf '%p\n' | sort)
+
+          # Signed/manual evidence, preregistrations, failures, and reviews relevant to the qualification lineage.
+          for d in governance-runtime/manual-attestations governance-runtime/repair-preregistrations governance-runtime/failures governance-runtime/manual-reviews governance-runtime/review-evidence; do
+            if [[ -d "$TMP/candidate/$d" ]]; then
+              while IFS= read -r f; do append_file CANDIDATE "$TMP/candidate" "$f"; done < <(cd "$TMP/candidate" && find "$d" -maxdepth 1 -type f -printf '%p\n' | sort)
+            fi
+          done
+
+          # External checker implementation, workflow, and signed ruleset evidence.
+          for f in checker/falsify_candidate.py checker/falsify_candidate_entry.py checker/falsify_candidate_r9_entry.py .github/workflows/external-qualification.yml README.md; do
+            append_file CHECKER "$TMP/checker" "$f"
+          done
+          if [[ -d "$TMP/checker/evidence" ]]; then
+            while IFS= read -r f; do append_file CHECKER "$TMP/checker" "$f"; done < <(cd "$TMP/checker" && find evidence -type f -printf '%p\n' | sort)
+          fi
+
+          # External governance-root complete public contract.
+          while IFS= read -r f; do append_file ROOT "$TMP/root" "$f"; done < <(cd "$TMP/root" && find . -type f ! -path './.git/*' -printf '%P\n' | sort)
+
+          # Exact Git metadata for successor lineage.
+          {
+            echo
+            echo '================================================================'
+            echo 'BEGIN GENERATED EVIDENCE: EXACT GIT METADATA'
+            echo '----------------------------------------------------------------'
+            echo 'Candidate commit:'
+            git -C "$TMP/candidate" show -s --format='commit=%H%nparents=%P%ntree=%T%nauthor_date=%aI%ncommitter_date=%cI%nsubject=%s' "$CANDIDATE_SHA"
+            echo
+            echo 'Checker commit:'
+            git -C "$TMP/checker" show -s --format='commit=%H%nparents=%P%ntree=%T%nauthor_date=%aI%ncommitter_date=%cI%nsubject=%s' "$CHECKER_SHA"
+            echo
+            echo 'Root commit:'
+            git -C "$TMP/root" show -s --format='commit=%H%nparents=%P%ntree=%T%nauthor_date=%aI%ncommitter_date=%cI%nsubject=%s' "$ROOT_SHA"
+            echo 'END GENERATED EVIDENCE: EXACT GIT METADATA'
+            echo '================================================================'
+          } >> "$OUT"
+
+          # Public exact check-run evidence.
+          curl -fsSL -H 'Accept: application/vnd.github+json' \
+            'https://api.github.com/repos/vij7661/setugo-ai-development-framework/check-runs/102864110780' \
+            > "$TMP/check-run.json"
+          append_file GENERATED "$TMP" check-run.json
+
+          sha256sum "$OUT" | tee "$OUT.sha256"
+
+      - name: Commit generated packet to packaging branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add TESTING-QUALIFICATION-R9-REVIEW-af3b21fc-DEEPSEEK.txt TESTING-QUALIFICATION-R9-REVIEW-af3b21fc-DEEPSEEK.txt.sha256
+          git commit -m 'Add exact R9 successor review packet [packet-generated]'
+          git push origin HEAD:package/review-af3b21fc
