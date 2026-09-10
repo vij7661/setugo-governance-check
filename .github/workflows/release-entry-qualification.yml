@@ -40,7 +40,7 @@ jobs:
         env:
           GOVERNANCE_TOKEN: ${{ steps.app-token.outputs.token }}
           SOURCE_SHA: 15d50cc25ae524fc64e2c65269c91135e0361846
-          CANDIDATE_SHA: 82782136fcbff465cddaf7b9832eafd2283fd892
+          CANDIDATE_SHA: 4200397f21e12f900c309ee1bc66fa8424135f11
         run: |
           set -euo pipefail
           python checker/release_entry_qualification.py \
@@ -64,7 +64,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           STEP_OUTCOME: ${{ steps.qualify.outcome }}
           SOURCE_SHA: 15d50cc25ae524fc64e2c65269c91135e0361846
-          CANDIDATE_SHA: 82782136fcbff465cddaf7b9832eafd2283fd892
+          CANDIDATE_SHA: 4200397f21e12f900c309ee1bc66fa8424135f11
           CHECKER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
