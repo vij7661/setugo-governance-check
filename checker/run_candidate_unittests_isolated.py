@@ -161,6 +161,17 @@ def _candidate_frame_present(runtime: Path) -> bool:
     return False
 
 
+def _immediate_caller_is_candidate(runtime: Path) -> bool:
+    frame = sys._getframe(2)
+    filename = frame.f_code.co_filename if frame is not None else ""
+    if not filename or filename.startswith("<"):
+        return False
+    try:
+        return _is_under(Path(filename).resolve(), runtime)
+    except (OSError, RuntimeError):
+        return False
+
+
 def _install_runtime_guard(runtime: Path, selected: list[str], manifest: dict[str, str]) -> None:
     allowed = set(manifest) | set(selected)
     for relpath, expected_blob in manifest.items():
@@ -180,30 +191,27 @@ def _install_runtime_guard(runtime: Path, selected: list[str], manifest: dict[st
         if not isinstance(filename, str):
             return
 
-        # Code executed from a candidate-local file must be an explicitly pinned
-        # runtime file or one of the explicitly selected pinned test modules.
         relpath = _origin_relpath(runtime, filename)
         if relpath is not None:
             if relpath not in allowed:
                 raise RuntimeError(f"runtime guard rejected execution of unpinned candidate file: {relpath}")
-            # Direct exec/eval of dynamically created code can spoof a pinned
-            # filename. Normal module execution is invoked by import machinery,
-            # not directly from a candidate-runtime frame.
-            caller = sys._getframe(1)
-            caller_file = caller.f_code.co_filename
-            if caller_file and not caller_file.startswith("<"):
-                try:
-                    if _is_under(Path(caller_file).resolve(), runtime):
-                        raise RuntimeError("runtime guard rejected direct dynamic code execution from candidate runtime")
-                except (OSError, RuntimeError) as exc:
-                    if isinstance(exc, RuntimeError):
-                        raise
+            if _immediate_caller_is_candidate(runtime):
+                raise RuntimeError("runtime guard rejected direct dynamic code execution from candidate runtime")
             return
 
-        # eval/exec/compile commonly emit synthetic filenames such as <string>.
-        # If such code executes while any candidate-runtime frame is active,
-        # reject regardless of how the callable was obtained (alias/getattr/
-        # __builtins__/loader indirection).
+        # Frozen stdlib modules legitimately execute code with filenames such as
+        # `<frozen runpy>` while a candidate import frame is waiting above them.
+        # Allow that import-machinery case, but still reject any direct candidate
+        # attempt to execute code while spoofing a frozen-looking filename.
+        if filename.startswith("<frozen "):
+            if _immediate_caller_is_candidate(runtime):
+                raise RuntimeError("runtime guard rejected direct dynamic code execution from candidate runtime")
+            return
+
+        # eval/exec/compile normally produce synthetic names (`<string>`, `<x>`,
+        # etc.). Reject whenever candidate runtime is on the active stack. This
+        # is independent of whether the callable was obtained through an alias,
+        # getattr, __builtins__, or another dispatch mechanism.
         if filename.startswith("<") and _candidate_frame_present(runtime):
             raise RuntimeError("runtime guard rejected synthetic dynamic code execution from candidate runtime")
 
