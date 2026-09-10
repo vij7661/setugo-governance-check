@@ -1,0 +1,96 @@
+name: RELEASE R3 Merge Authority Gate
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  publish-authority-gate:
+    runs-on: ubuntu-24.04
+    environment: governance-app-publisher
+    steps:
+      - name: Checkout exact protected checker revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate protected checker revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          printf 'checker_sha=%s\n' "$GITHUB_SHA"
+
+      - name: Create governance App installation token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.SETUGO_GOVERNANCE_APP_ID }}
+          private-key: ${{ secrets.SETUGO_GOVERNANCE_APP_PRIVATE_KEY }}
+          owner: vij7661
+          repositories: setugo-ai-development-framework
+
+      - name: Verify signed RELEASE merge authority if present
+        id: authority
+        continue-on-error: true
+        shell: bash
+        env:
+          CANDIDATE_SHA: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+        run: |
+          set -euo pipefail
+          ATTESTATION='evidence/release-r3-merge-authority.attestation.json'
+          SIGNATURE='evidence/release-r3-merge-authority.attestation.sig.b64'
+          if [[ -f "$ATTESTATION" && -f "$SIGNATURE" ]]; then
+            ATTESTATION_B64="$(base64 -w0 "$ATTESTATION")"
+            SIGNATURE_B64="$(tr -d '\r\n' < "$SIGNATURE")"
+          else
+            ATTESTATION_B64=''
+            SIGNATURE_B64=''
+          fi
+          python checker/verify_release_merge_authority.py \
+            --candidate "$CANDIDATE_SHA" \
+            --attestation-b64 "$ATTESTATION_B64" \
+            --signature-b64 "$SIGNATURE_B64" \
+            | tee release-merge-authority-result.json
+
+      - name: Publish dedicated RELEASE merge-authority App check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STEP_OUTCOME: ${{ steps.authority.outcome }}
+          CANDIDATE_SHA: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+          CHECKER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$STEP_OUTCOME" == success ]]; then
+            CONCLUSION=success
+            TITLE='Signed RELEASE merge authority verified'
+            SUMMARY="Checker ${CHECKER_SHA} verified HUMAN_RELEASE_AUTHORITY for exact candidate ${CANDIDATE_SHA} and scope MERGE_RELEASE_CANDIDATE. This check reflects signed authority; it does not mint authority."
+          else
+            CONCLUSION=failure
+            TITLE='RELEASE merge authority absent or invalid'
+            SUMMARY="Checker ${CHECKER_SHA} did not verify the required signed HUMAN_RELEASE_AUTHORITY attestation for exact candidate ${CANDIDATE_SHA}. Merge remains blocked."
+          fi
+          jq -n \
+            --arg name 'external-release-merge-authority' \
+            --arg head_sha "$CANDIDATE_SHA" \
+            --arg external_id "$CHECKER_SHA" \
+            --arg conclusion "$CONCLUSION" \
+            --arg title "$TITLE" \
+            --arg summary "$SUMMARY" \
+            '{name:$name,head_sha:$head_sha,external_id:$external_id,status:"completed",conclusion:$conclusion,output:{title:$title,summary:$summary}}' > check.json
+          RESPONSE="$(curl --fail-with-body -sS -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            https://api.github.com/repos/vij7661/setugo-ai-development-framework/check-runs \
+            -d @check.json)"
+          printf '%s\n' "$RESPONSE" > published-check.json
+          test "$(jq -r '.head_sha' published-check.json)" = "$CANDIDATE_SHA"
+          test "$(jq -r '.external_id' published-check.json)" = "$CHECKER_SHA"
+          test "$(jq -r '.app.id' published-check.json)" = '4895420'
+          test "$(jq -r '.name' published-check.json)" = 'external-release-merge-authority'
+          printf 'authority_step_outcome=%s\n' "$STEP_OUTCOME"
