@@ -3,9 +3,10 @@
 
 This checker-owned wrapper preserves the reviewed RELEASE falsifier while
 rebinding only the exact candidate SHA, the authenticated RELEASE-root blob,
-and the F-08-required independent adjudication App check. It additionally
-requires an exhaustive checker-owned candidate-local runtime import closure
-audit before RELEASE external qualification can pass. Authority effect: none.
+and the F-08-required independent adjudication App check. It requires both an
+exhaustive checker-owned candidate-local static import closure audit and an
+execution-time exact-pin guard inside the isolated qualification runner before
+RELEASE external qualification can pass. Authority effect: none.
 """
 from __future__ import annotations
 
@@ -24,6 +25,10 @@ release.RELEASE_REQUIRED_CHECKS = frozenset(
     set(release.RELEASE_REQUIRED_CHECKS) | {REQUIRED_REVIEW_ADJUDICATION_CHECK}
 )
 runtime_closure.CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
+# The shared isolated runner is generic. RELEASE supplies the exact checker-owned
+# runtime map explicitly so every candidate-local module actually imported while
+# qualification tests execute must be present in this exact pin set.
+release.r10.RUNTIME_PINNED_BLOBS = dict(runtime_closure.PINNED_RUNTIME_BLOBS)
 
 _original_extra_release_paths = release.verify_and_execute_extra_release_paths
 
