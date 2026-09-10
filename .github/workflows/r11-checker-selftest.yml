@@ -25,7 +25,9 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           printf 'checker_sha=%s\n' "$GITHUB_SHA"
 
-      - name: Run R11 checker-owned harness and current RELEASE-binding selftests
-        run: |
-          python -m unittest -v checker/test_r11_harness.py
-          python -m unittest -v checker/test_release_current_binding.py
+      - name: Run R11 checker-owned harness falsification tests
+        run: python -m unittest -v checker/test_r11_harness.py
+
+      - name: Run exact-current RELEASE binding selftests
+        working-directory: checker
+        run: python -m unittest -v test_release_current_binding.py
