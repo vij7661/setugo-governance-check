@@ -1,0 +1,41 @@
+name: RELEASE R3 Successor Requalification
+
+on:
+  push:
+    branches:
+      - release/r3-merge-authority-gate
+
+permissions:
+  contents: read
+
+jobs:
+  requalify:
+    runs-on: ubuntu-24.04
+    environment: governance-app-publisher
+    steps:
+      - name: Checkout exact checker branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Verify exact checker checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'checker_sha=%s\n' "$GITHUB_SHA"
+      - name: Create governance App installation token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ secrets.SETUGO_GOVERNANCE_APP_ID }}
+          private-key: ${{ secrets.SETUGO_GOVERNANCE_APP_PRIVATE_KEY }}
+          owner: vij7661
+          repositories: setugo-ai-development-framework
+      - name: Run exact successor external falsifier
+        shell: bash
+        env:
+          GOVERNANCE_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python checker/falsify_candidate_release_r1.py \
+            --repo vij7661/setugo-ai-development-framework \
+            --sha 6d4fbb9ce266979ca3147a159ae724f33e0362ba

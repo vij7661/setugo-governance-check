@@ -1,0 +1,48 @@
+name: RELEASE R3 Merge Authority Selftest
+
+on:
+  push:
+    branches:
+      - release/r3-merge-authority-gate
+  pull_request:
+    paths:
+      - 'checker/verify_release_merge_authority.py'
+      - 'checker/test_release_merge_authority_gate.py'
+      - '.github/workflows/release-r3-merge-authority-selftest.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  negative-controls:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact checker revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'checker_sha=%s\n' "$GITHUB_SHA"
+      - name: Run frozen negative controls
+        working-directory: checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest -v test_release_merge_authority_gate.py
+      - name: Prove absent authority evidence fails closed against live PR binding
+        working-directory: checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          python verify_release_merge_authority.py \
+            --candidate 6d4fbb9ce266979ca3147a159ae724f33e0362ba \
+            > absent-authority.json
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          test "$(jq -r '.result' absent-authority.json)" = 'REJECTED'
+          test "$(jq -r '.authority_effect' absent-authority.json)" = 'NONE'
+          grep -q 'attestation is missing' absent-authority.json
