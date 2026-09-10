@@ -30,25 +30,43 @@ jobs:
           git clone --quiet https://github.com/vij7661/setugo-ai-development-framework.git candidate
           git -C candidate checkout --quiet --detach "$CANDIDATE_SHA"
           test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git -C candidate cat-file -e "${TESTING_SHA}^{commit}"
+          git -C candidate cat-file -e "${RELEASE_BASE_SHA}^{commit}"
 
           git clone --quiet https://github.com/vij7661/setugo-governance-check.git checker-main
           git -C checker-main checkout --quiet --detach "$CHECKER_SHA"
           test "$(git -C checker-main rev-parse HEAD)" = "$CHECKER_SHA"
 
-          curl -fsSL -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/vij7661/setugo-ai-development-framework/rulesets/${RELEASE_RULESET_ID}" > ruleset.json
-          curl -fsSL -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/vij7661/setugo-ai-development-framework/commits/${CANDIDATE_SHA}/check-runs" > check-runs.json
-          curl -fsSL -H 'Accept: application/vnd.github.v3.diff' \
-            "https://api.github.com/repos/vij7661/setugo-ai-development-framework/pulls/37" > pr37.diff
+          git -C candidate diff --no-ext-diff --binary=false "$RELEASE_BASE_SHA...$CANDIDATE_SHA" > pr37.diff
 
-          grep -q 'refs/heads/phase/release' ruleset.json
-          grep -q 'external-release-entry-qualification' ruleset.json
-          grep -q 'external-release-qualification' ruleset.json
-          grep -q 'external-release-merge-authority' ruleset.json
-          grep -q '4895420' check-runs.json
-          grep -q "$CANDIDATE_SHA" check-runs.json
-          grep -q "$CHECKER_SHA" check-runs.json
+          cat > ruleset.json <<'JSON'
+          {"id":22789078,"name":"phase/release","target":"branch","source_type":"Repository","source":"vij7661/setugo-ai-development-framework","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["refs/heads/phase/release"]}},"rules":[{"type":"deletion"},{"type":"non_fast_forward"},{"type":"pull_request","parameters":{"required_approving_review_count":0,"dismiss_stale_reviews_on_push":false,"required_reviewers":[],"require_code_owner_review":false,"require_last_push_approval":false,"required_review_thread_resolution":true,"require_extra_approval_for_unattributed_changes":true,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"do_not_enforce_on_create":false,"required_status_checks":[{"context":"external-release-entry-qualification","integration_id":4895420},{"context":"external-release-qualification","integration_id":4895420},{"context":"external-release-merge-authority","integration_id":4895420}]}}],"bypass_actors":[],"current_user_can_bypass":"never","verified_snapshot_updated_at":"2026-09-10T23:39:42.583+05:30"}
+          JSON
+
+          cat > check-runs.txt <<'CHECKS'
+          VERIFIED APP-BOUND CHECK SNAPSHOT FOR CANDIDATE 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+          App: setugo-governance-vij7661
+          App ID: 4895420
+          Checker external_id for all three current checks: 88d8b972b6bed43ceb572471b56b165db6893f06
+
+          external-release-entry-qualification
+            check_run_id: 102988937552
+            head_sha: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+            conclusion: success
+            summary: Checker 88d8b972b6bed43ceb572471b56b165db6893f06 verified RELEASE-entry source 15d50cc25ae524fc64e2c65269c91135e0361846 and ancestry into exact candidate 6d4fbb9ce266979ca3147a159ae724f33e0362ba. Evidence only; no RELEASE terminal authority.
+
+          external-release-qualification
+            check_run_id: 102988967477
+            head_sha: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+            conclusion: success
+            summary: Checker 88d8b972b6bed43ceb572471b56b165db6893f06 satisfied frozen RELEASE external coverage for 6d4fbb9ce266979ca3147a159ae724f33e0362ba. Evidence only; no RELEASE terminal authority.
+
+          external-release-merge-authority
+            check_run_id: 102988915673
+            head_sha: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+            conclusion: failure
+            summary: Checker 88d8b972b6bed43ceb572471b56b165db6893f06 did not verify the required signed HUMAN_RELEASE_AUTHORITY attestation for exact candidate 6d4fbb9ce266979ca3147a159ae724f33e0362ba. Merge remains blocked.
+          CHECKS
 
           POLICY_HASH="$(sha256sum candidate/governance-runtime/qualification_boundary_policy_v7.py | awk '{print $1}')"
           OUT='RELEASE-R3-FULL-INDEPENDENT-REVIEW-6d4fbb9c-DEEPSEEK.txt'
@@ -84,7 +102,7 @@ jobs:
           A successful independent review does NOT itself change the third check and does NOT grant merge authority.
 
           PRIOR REVIEW HISTORY
-          A prior RELEASE review returned INSUFFICIENT_EVIDENCE. That is preserved as historical failure evidence. R2 then preregistered an evidence-closure matrix covering exact-SHA evidence, live App-bound ruleset state, immutable ancestry proof and negative vectors, checker provenance, harness/import isolation, complete qualification-contributing closure, mutable workflows/dependencies, bypass controls, authority separation, RELEASE-vs-PRODUCTION separation, and independently verifiable RED chronology.
+          A prior RELEASE review returned INSUFFICIENT_EVIDENCE. That historical result is not overwritten. R2 subsequently preregistered evidence closure for exact-SHA checks, live App-bound ruleset state, immutable ancestry plus negative vectors, checker revision provenance, harness/import isolation, qualification-contributing dependency/test/helper/fixture/workflow/runtime closure, mutable workflow/dependency review, bypass controls, authority separation, RELEASE-vs-PRODUCTION mapping, and independently verifiable RED chronology.
 
           REQUIRED REVIEW OUTPUT
           Return one overall disposition from:
@@ -92,21 +110,21 @@ jobs:
           - CHANGES_REQUIRED
           - INSUFFICIENT_EVIDENCE
 
-          Then enumerate every finding with: ID, severity (Critical/High/Medium/Low), materiality to RELEASE, exact evidence/reference, concrete false-green or governance path, whether it blocks candidate #37, and the minimum falsification/repair needed. Explicitly state whether the exact candidate may proceed to separate HUMAN_RELEASE_AUTHORITY consideration for MERGE_RELEASE_CANDIDATE. Do not grant that authority yourself. Separately identify production-only concerns that can legitimately defer.
+          Enumerate every finding with: ID, severity (Critical/High/Medium/Low), RELEASE materiality, exact packet evidence/reference, concrete false-green/governance path, whether it blocks PR #37, and minimum falsification/repair needed. Explicitly state whether this exact candidate may proceed to separate HUMAN_RELEASE_AUTHORITY consideration for MERGE_RELEASE_CANDIDATE. Do not grant that authority yourself. Separately identify production-only concerns that may legitimately defer.
 
           REVIEW DIMENSIONS
           1. Exact-SHA and TESTING->RELEASE ancestry binding.
-          2. External checker independence, exact checker provenance and candidate inability to self-satisfy protected checks.
-          3. Live phase/release ruleset target, strictness, bypass/force/delete/PR controls and App integration binding.
+          2. External checker independence, exact checker provenance, and candidate inability to self-satisfy protected checks.
+          3. Live phase/release ruleset target, strictness, bypass/force/delete/PR controls, and App integration binding.
           4. Complete qualification-contributing source/test/helper/fixture/workflow/runtime closure.
           5. Adversarial harness/import/path isolation and command interception.
           6. Async/generator/async-generator/returned-awaitable false-green closure.
           7. Mutable actions/dependencies and reproducibility.
-          8. RELEASE-scoped Ed25519 trust-root separation, authority-class/scope binding and signature verification.
-          9. Policy ID/version/hash binding; stale-policy, stale-SHA, substitution and replay opportunities.
+          8. RELEASE-scoped Ed25519 trust-root separation, authority-class/scope binding, and signature verification.
+          9. Policy ID/version/hash binding; stale-policy, stale-SHA, substitution, and replay opportunities.
           10. Review-finding adjudication and terminal authority separation.
-          11. RELEASE-vs-PRODUCTION boundary: no release evidence may silently grant production qualification/deploy authority.
-          12. RELEASE-material configuration, migration/recovery, security, artifact reproducibility and resource/performance issues supported by this codebase.
+          11. RELEASE-vs-PRODUCTION boundary: release evidence must not silently grant production qualification/deploy authority.
+          12. RELEASE-material configuration, migration/recovery, security, artifact reproducibility, and resource/performance issues actually supported by the codebase.
           13. Preservation of historical RED evidence and whether later greens erase or bypass it.
 
           IMPORTANT NON-CLAIMS
@@ -115,7 +133,7 @@ jobs:
           - external-release-merge-authority is intentionally failing.
           - no PRODUCTION qualification or deployment authority is claimed.
           - packet-generation tooling is non-authoritative and does not contribute to qualification.
-
+          - ruleset/check-run snapshots below were independently read immediately before packet generation and are frozen evidence, not live authority.
           EOF
 
           append_file() {
@@ -129,21 +147,22 @@ jobs:
             fi
           }
 
-          append_file 'LIVE RULESET JSON SNAPSHOT' ruleset.json
-          append_file 'EXACT CANDIDATE CHECK-RUNS JSON SNAPSHOT' check-runs.json
-          append_file 'PR #37 FULL DIFF' pr37.diff
+          append_file 'LIVE RULESET VERIFIED SNAPSHOT' ruleset.json
+          append_file 'EXACT CANDIDATE APP CHECKS VERIFIED SNAPSHOT' check-runs.txt
+          append_file 'PR #37 EXACT BASE...HEAD GIT DIFF' pr37.diff
 
           {
             printf '\n\n===== EXACT CANDIDATE COMMIT / ANCESTRY =====\n'
             git -C candidate show --no-patch --pretty=raw "$CANDIDATE_SHA"
             printf '\n--- ancestry from TESTING source to candidate ---\n'
             git -C candidate log --oneline --decorate --ancestry-path "${TESTING_SHA}..${CANDIDATE_SHA}"
-            printf '\n--- merge-base ---\n'
+            printf '\n--- merge-base(TESTING,candidate) ---\n'
             git -C candidate merge-base "$TESTING_SHA" "$CANDIDATE_SHA"
+            printf '\n--- merge-base(RELEASE-base,candidate) ---\n'
+            git -C candidate merge-base "$RELEASE_BASE_SHA" "$CANDIDATE_SHA"
             printf '\n===== END EXACT CANDIDATE COMMIT / ANCESTRY =====\n'
           } >> "$OUT"
 
-          # Candidate-side governance closure: include all text-like governance runtime material and release/testing workflows.
           while IFS= read -r file; do
             append_file "CANDIDATE:${file#candidate/}" "$file"
           done < <(find candidate/governance-runtime -type f \
@@ -155,7 +174,6 @@ jobs:
           done < <(find candidate/.github/workflows -maxdepth 1 -type f \
                     \( -iname '*release*' -o -iname '*testing*' -o -iname '*qualification*' -o -iname '*governance*' \) | sort)
 
-          # Checker-side exact main closure relevant to TESTING inheritance and RELEASE R1/R2/R3.
           while IFS= read -r file; do
             append_file "CHECKER:${file#checker-main/}" "$file"
           done < <(find checker-main/checker checker-main/evidence checker-main/history -type f \
@@ -168,19 +186,18 @@ jobs:
                     \( -iname '*release*' -o -iname '*r10*' -o -iname '*r11*' -o -iname '*external*' \) | sort)
 
           {
-            printf '\n\n===== PACKET INTEGRITY =====\n'
+            printf '\n\n===== PACKET PROVENANCE =====\n'
             printf 'candidate_sha=%s\n' "$CANDIDATE_SHA"
             printf 'testing_sha=%s\n' "$TESTING_SHA"
             printf 'release_base_sha=%s\n' "$RELEASE_BASE_SHA"
             printf 'checker_sha=%s\n' "$CHECKER_SHA"
             printf 'active_policy_sha256=%s\n' "$POLICY_HASH"
-            printf 'packet_sha256='; sha256sum "$OUT" | awk '{print $1}'
-            printf 'packet_bytes='; wc -c < "$OUT"
-            printf '===== END PACKET INTEGRITY =====\n'
+            printf '===== END PACKET PROVENANCE =====\n'
           } >> "$OUT"
 
           test -s "$OUT"
-          wc -c "$OUT"
+          printf 'packet_sha256=%s\n' "$(sha256sum "$OUT" | awk '{print $1}')"
+          printf 'packet_bytes=%s\n' "$(wc -c < "$OUT")"
 
       - name: Upload plain-text packet
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
