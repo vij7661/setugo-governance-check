@@ -2,11 +2,11 @@
 """Checker-owned candidate-local dependency closure verifier for RELEASE.
 
 The verifier exact-pins all authority-relevant runtime modules, walks their
-candidate-local imports transitively, and also treats every checker-selected,
-exact-pinned qualification test as an import root. Any candidate-local helper
-reachable from those tests must be present in the same exact runtime manifest.
-Dynamic import/lookup/execution capability is rejected in governed runtime code.
-Passing is evidence only.
+candidate-local imports transitively, and can also treat every checker-selected,
+exact-pinned qualification test as an explicit import root. Any candidate-local
+helper reachable from those tests must be present in the same exact runtime
+manifest. Dynamic import/lookup/execution capability is rejected in governed
+runtime code. Passing is evidence only.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import ast
 from pathlib import Path
 import subprocess
 import tempfile
+from typing import Iterable
 
 CANDIDATE_REPO = "https://github.com/vij7661/setugo-ai-development-framework.git"
 CANDIDATE_SHA = "4200397f21e12f900c309ee1bc66fa8424135f11"
@@ -35,7 +36,6 @@ PINNED_RUNTIME_BLOBS = {
 }
 
 ENTRY_POINTS = frozenset(PINNED_RUNTIME_BLOBS)
-QUALIFICATION_TEST_FILES: frozenset[str] = frozenset()
 FORBIDDEN_DYNAMIC_SYMBOLS = frozenset({
     "__import__", "import_module", "exec", "eval", "compile", "getattr",
 })
@@ -144,10 +144,25 @@ def _require_local_targets_pinned(runtime: Path, source_label: str, imports: set
     return local_targets
 
 
-def verify_repo(repo: Path) -> dict[str, list[str]]:
+def _normalize_test_roots(qualification_test_files: Iterable[str] | None) -> frozenset[str]:
+    roots = frozenset(qualification_test_files or ())
+    for filename in roots:
+        if not isinstance(filename, str) or not filename.startswith("test_") or not filename.endswith(".py"):
+            raise AssertionError(f"invalid qualification test closure root: {filename!r}")
+        if "/" in filename or "\\" in filename:
+            raise AssertionError(f"qualification test closure root must be top-level: {filename!r}")
+    return roots
+
+
+def verify_repo(
+    repo: Path,
+    *,
+    qualification_test_files: Iterable[str] | None = None,
+) -> dict[str, list[str]]:
     runtime = repo / RUNTIME_DIR
     if not runtime.is_dir():
         raise AssertionError("candidate governance-runtime directory missing")
+    test_roots = _normalize_test_roots(qualification_test_files)
 
     for runtime_relpath, expected_blob in PINNED_RUNTIME_BLOBS.items():
         relpath = f"{RUNTIME_DIR}/{runtime_relpath}"
@@ -182,7 +197,7 @@ def verify_repo(repo: Path) -> dict[str, list[str]]:
     if missing:
         raise AssertionError(f"pinned runtime entries were not audited: {sorted(missing)}")
 
-    for test_filename in sorted(QUALIFICATION_TEST_FILES):
+    for test_filename in sorted(test_roots):
         test_path = runtime / test_filename
         if not test_path.is_file():
             raise AssertionError(f"pinned qualification test missing from candidate runtime: {test_filename}")
@@ -196,7 +211,11 @@ def verify_repo(repo: Path) -> dict[str, list[str]]:
     return {name: edges[name] for name in sorted(edges)}
 
 
-def verify(candidate_sha: str = CANDIDATE_SHA) -> dict[str, list[str]]:
+def verify(
+    candidate_sha: str = CANDIDATE_SHA,
+    *,
+    qualification_test_files: Iterable[str] | None = None,
+) -> dict[str, list[str]]:
     if candidate_sha != CANDIDATE_SHA:
         raise AssertionError("runtime closure verifier is not bound to exact RELEASE candidate")
     with tempfile.TemporaryDirectory(prefix="setugo-release-import-closure-") as td:
@@ -210,7 +229,7 @@ def verify(candidate_sha: str = CANDIDATE_SHA) -> dict[str, list[str]]:
         actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
         if actual != candidate_sha:
             raise AssertionError("runtime closure checkout is not exact candidate SHA")
-        return verify_repo(repo)
+        return verify_repo(repo, qualification_test_files=qualification_test_files)
 
 
 if __name__ == "__main__":
