@@ -4,7 +4,11 @@
 A verified adjudication is evidence only. It does not grant RELEASE terminal
 authority. The adjudication must be signed by the independent governance
 adjudicator trust root and must itself bind the raw review digest, candidate,
-checker, PR, policy, and PASS disposition.
+frozen qualification checker, PR, policy, and PASS disposition.
+
+`reviewed_checker_sha` intentionally identifies the checker revision whose
+qualification evidence is being adjudicated. It is not the self-SHA of this
+verifier, which may evolve through protected successor commits.
 """
 from __future__ import annotations
 
@@ -23,7 +27,7 @@ from urllib.request import Request, urlopen
 CANDIDATE_REPO = "vij7661/setugo-ai-development-framework"
 CANDIDATE_SHA = "4200397f21e12f900c309ee1bc66fa8424135f11"
 PR_NUMBER = 37
-CHECKER_SHA = "4757ceb036c95739aa695d035fc97df63148a691"
+QUALIFICATION_CHECKER_SHA = "77ad64c177b1eed516b9e58699c1f5128ba058a6"
 POLICY_ID = "QUALIFICATION_BOUNDARY_OWNERSHIP"
 POLICY_VERSION = 7
 POLICY_HASH = "3a1936d3e8956b2521908189139ee73868c48f29be13fcacea84f839ca6b2258"
@@ -150,7 +154,7 @@ def validate_artifact(artifact: Mapping[str, Any]) -> None:
         "decision_scope": DECISION_SCOPE,
         "disposition": ELIGIBLE_DISPOSITION,
         "source_kind": SOURCE_KIND,
-        "reviewed_checker_sha": CHECKER_SHA,
+        "reviewed_checker_sha": QUALIFICATION_CHECKER_SHA,
         "qualification_policy_id": POLICY_ID,
         "qualification_policy_version": POLICY_VERSION,
         "qualification_policy_hash": POLICY_HASH,
