@@ -8,8 +8,12 @@ on:
     paths:
       - 'checker/verify_release_merge_authority.py'
       - 'checker/verify_release_merge_authority_current.py'
+      - 'checker/verify_release_review_adjudication.py'
       - 'checker/test_release_merge_authority_gate.py'
+      - 'checker/test_release_review_adjudication.py'
       - '.github/workflows/release-r3-merge-authority-selftest.yml'
+      - '.github/workflows/release-r3-merge-authority.yml'
+      - '.github/workflows/release-review-adjudication.yml'
 
 permissions:
   contents: read
@@ -26,13 +30,13 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           printf 'checker_sha=%s\n' "$GITHUB_SHA"
-      - name: Run frozen negative controls
+      - name: Run merge-authority and adjudication negative controls
         working-directory: checker
         shell: bash
         run: |
           set -euo pipefail
-          python -m unittest -v test_release_merge_authority_gate.py
-      - name: Prove absent authority evidence fails closed against live PR binding
+          python -m unittest -v test_release_merge_authority_gate.py test_release_review_adjudication.py
+      - name: Prove absent adjudication blocks authority before network or signature
         working-directory: checker
         shell: bash
         run: |
@@ -40,10 +44,24 @@ jobs:
           set +e
           python verify_release_merge_authority_current.py \
             --candidate 4200397f21e12f900c309ee1bc66fa8424135f11 \
-            > absent-authority.json
+            > absent-adjudication.json
           rc=$?
           set -e
           test "$rc" -ne 0
-          test "$(jq -r '.result' absent-authority.json)" = 'REJECTED'
-          test "$(jq -r '.authority_effect' absent-authority.json)" = 'NONE'
-          grep -q 'attestation is missing' absent-authority.json
+          test "$(jq -r '.result' absent-adjudication.json)" = 'REJECTED'
+          test "$(jq -r '.authority_effect' absent-adjudication.json)" = 'NONE'
+          grep -q 'adjudication digest' absent-adjudication.json
+      - name: Prove free-form evidence cannot stand in for adjudication digest
+        working-directory: checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          python verify_release_merge_authority_current.py \
+            --candidate 4200397f21e12f900c309ee1bc66fa8424135f11 \
+            --adjudication-evidence-ref R3-test-evidence \
+            > free-form-evidence.json
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          grep -q 'adjudication digest' free-form-evidence.json

@@ -1,4 +1,4 @@
-name: RELEASE R3 Merge Authority Gate
+name: RELEASE Independent Review Adjudication Gate
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  publish-authority-gate:
+  publish-review-adjudication:
     runs-on: ubuntu-24.04
     environment: governance-app-publisher
     steps:
@@ -22,7 +22,6 @@ jobs:
           set -euo pipefail
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          printf 'checker_sha=%s\n' "$GITHUB_SHA"
 
       - name: Create governance App installation token
         id: app-token
@@ -33,7 +32,7 @@ jobs:
           owner: vij7661
           repositories: setugo-ai-development-framework
 
-      - name: Verify independent RELEASE adjudication prerequisite
+      - name: Verify independent RELEASE adjudication if present
         id: adjudication
         continue-on-error: true
         shell: bash
@@ -53,57 +52,27 @@ jobs:
             --signature-b64 "$SIGNATURE_B64" \
             | tee release-review-adjudication-result.json
 
-      - name: Verify signed RELEASE merge authority if present
-        id: authority
-        continue-on-error: true
-        shell: bash
-        env:
-          CANDIDATE_SHA: 4200397f21e12f900c309ee1bc66fa8424135f11
-          ADJUDICATION_OUTCOME: ${{ steps.adjudication.outcome }}
-        run: |
-          set -euo pipefail
-          ATTESTATION='evidence/release-r3-merge-authority.attestation.json'
-          SIGNATURE='evidence/release-r3-merge-authority.attestation.sig.b64'
-          if [[ "$ADJUDICATION_OUTCOME" == success ]]; then
-            ADJUDICATION_EVIDENCE_REF="$(jq -r '.evidence_ref' release-review-adjudication-result.json)"
-          else
-            ADJUDICATION_EVIDENCE_REF=''
-          fi
-          if [[ -f "$ATTESTATION" && -f "$SIGNATURE" ]]; then
-            ATTESTATION_B64="$(base64 -w0 "$ATTESTATION")"
-            SIGNATURE_B64="$(tr -d '\r\n' < "$SIGNATURE")"
-          else
-            ATTESTATION_B64=''
-            SIGNATURE_B64=''
-          fi
-          python checker/verify_release_merge_authority_current.py \
-            --candidate "$CANDIDATE_SHA" \
-            --attestation-b64 "$ATTESTATION_B64" \
-            --signature-b64 "$SIGNATURE_B64" \
-            --adjudication-evidence-ref "$ADJUDICATION_EVIDENCE_REF" \
-            | tee release-merge-authority-result.json
-
-      - name: Publish dedicated RELEASE merge-authority App check
+      - name: Publish dedicated independent-review App check
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ADJUDICATION_OUTCOME: ${{ steps.adjudication.outcome }}
-          AUTHORITY_OUTCOME: ${{ steps.authority.outcome }}
+          STEP_OUTCOME: ${{ steps.adjudication.outcome }}
           CANDIDATE_SHA: 4200397f21e12f900c309ee1bc66fa8424135f11
           CHECKER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ "$ADJUDICATION_OUTCOME" == success && "$AUTHORITY_OUTCOME" == success ]]; then
+          if [[ "$STEP_OUTCOME" == success ]]; then
             CONCLUSION=success
-            TITLE='Signed RELEASE merge authority verified against independent adjudication'
-            SUMMARY="Checker ${CHECKER_SHA} verified exact-candidate independent RELEASE PASS adjudication and a HUMAN_RELEASE_AUTHORITY signature bound to that adjudication digest."
+            TITLE='Independent RELEASE adjudication verified'
+            DIGEST="$(jq -r '.adjudication_digest' release-review-adjudication-result.json)"
+            SUMMARY="Checker ${CHECKER_SHA} verified signed independent RELEASE PASS adjudication for exact candidate ${CANDIDATE_SHA}; digest sha256:${DIGEST}. Evidence only; no terminal authority."
           else
             CONCLUSION=failure
-            TITLE='RELEASE merge prerequisites absent or invalid'
-            SUMMARY="Checker ${CHECKER_SHA} did not verify both independent RELEASE adjudication and digest-bound HUMAN_RELEASE_AUTHORITY for exact candidate ${CANDIDATE_SHA}. Merge remains blocked."
+            TITLE='Independent RELEASE adjudication absent or invalid'
+            SUMMARY="Checker ${CHECKER_SHA} did not verify an eligible signed independent RELEASE PASS adjudication for exact candidate ${CANDIDATE_SHA}."
           fi
           jq -n \
-            --arg name 'external-release-merge-authority' \
+            --arg name 'external-release-review-adjudication' \
             --arg head_sha "$CANDIDATE_SHA" \
             --arg external_id "$CHECKER_SHA" \
             --arg conclusion "$CONCLUSION" \
@@ -120,5 +89,4 @@ jobs:
           test "$(jq -r '.head_sha' published-check.json)" = "$CANDIDATE_SHA"
           test "$(jq -r '.external_id' published-check.json)" = "$CHECKER_SHA"
           test "$(jq -r '.app.id' published-check.json)" = '4895420'
-          test "$(jq -r '.name' published-check.json)" = 'external-release-merge-authority'
-          printf 'adjudication=%s authority=%s\n' "$ADJUDICATION_OUTCOME" "$AUTHORITY_OUTCOME"
+          test "$(jq -r '.name' published-check.json)" = 'external-release-review-adjudication'
