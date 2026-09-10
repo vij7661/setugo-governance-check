@@ -27,6 +27,20 @@ class ReleaseRuntimeImportClosureTests(unittest.TestCase):
         subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
         return td, repo
 
+    def _assert_dynamic_rejected(self, source: str) -> None:
+        td, repo = self._repo({"entry.py": source})
+        try:
+            pinned = {"entry.py": gate._blob_sha(repo, "governance-runtime/entry.py")}
+            with mock.patch.object(gate, "PINNED_RUNTIME_BLOBS", pinned), \
+                 mock.patch.object(gate, "ENTRY_POINTS", frozenset(pinned)):
+                with self.assertRaisesRegex(
+                    AssertionError,
+                    "dynamic import/lookup/execution capability forbidden",
+                ):
+                    gate.verify_repo(repo)
+        finally:
+            td.cleanup()
+
     def test_unpinned_candidate_local_import_fails_closed(self):
         td, repo = self._repo({"entry.py": "import hidden\n", "hidden.py": "VALUE = 1\n"})
         try:
@@ -40,36 +54,50 @@ class ReleaseRuntimeImportClosureTests(unittest.TestCase):
         finally:
             td.cleanup()
 
-    def test_importlib_import_module_fails_closed(self):
-        td, repo = self._repo({"entry.py": "import importlib\nimportlib.import_module('x')\n"})
-        try:
-            with mock.patch.object(
-                gate,
-                "PINNED_RUNTIME_BLOBS",
-                {"entry.py": gate._blob_sha(repo, "governance-runtime/entry.py")},
-            ), mock.patch.object(gate, "ENTRY_POINTS", frozenset({"entry.py"})):
-                with self.assertRaisesRegex(AssertionError, "dynamic import/execution construct forbidden"):
-                    gate.verify_repo(repo)
-        finally:
-            td.cleanup()
-
-    def test_attribute_dunder_import_fails_closed(self):
+    def test_direct_and_attribute_dynamic_symbols_fail_closed(self):
         for source in (
-            "import importlib\nimportlib.__import__('x')\n",
-            "import builtins\nbuiltins.__import__('x')\n",
+            "x = __import__\n",
+            "x = exec\n",
+            "x = eval\n",
+            "x = compile\n",
+            "import builtins\nx = builtins.exec\n",
+            "import builtins\nx = builtins.eval\n",
+            "import builtins\nx = builtins.compile\n",
+            "import importlib\nx = importlib.__import__\n",
+            "import importlib\nx = importlib.import_module\n",
         ):
             with self.subTest(source=source):
-                td, repo = self._repo({"entry.py": source})
-                try:
-                    with mock.patch.object(
-                        gate,
-                        "PINNED_RUNTIME_BLOBS",
-                        {"entry.py": gate._blob_sha(repo, "governance-runtime/entry.py")},
-                    ), mock.patch.object(gate, "ENTRY_POINTS", frozenset({"entry.py"})):
-                        with self.assertRaisesRegex(AssertionError, "dynamic import/execution construct forbidden"):
-                            gate.verify_repo(repo)
-                finally:
-                    td.cleanup()
+                self._assert_dynamic_rejected(source)
+
+    def test_getattr_dynamic_dispatch_is_rejected_as_capability(self):
+        for source in (
+            "import builtins\ngetattr(builtins, 'exec')('x=1')\n",
+            "import builtins\nname='ex'+'ec'\ngetattr(builtins, name)('x=1')\n",
+            "import importlib\ngetattr(importlib, '__import__')('x')\n",
+            "obj = object()\ngetattr(obj, 'anything', None)\n",
+        ):
+            with self.subTest(source=source):
+                self._assert_dynamic_rejected(source)
+
+    def test_builtins_subscript_dynamic_dispatch_is_rejected(self):
+        for source in (
+            "__builtins__['exec']('x=1')\n",
+            "__builtins__['eval']('1+1')\n",
+            "__builtins__['compile']('x=1','<x>','exec')\n",
+            "__builtins__['__import__']('x')\n",
+        ):
+            with self.subTest(source=source):
+                self._assert_dynamic_rejected(source)
+
+    def test_importlib_runpy_and_builtins_imports_fail_closed(self):
+        for source in (
+            "import importlib\n",
+            "import runpy\n",
+            "import builtins\n",
+            "from importlib import import_module\n",
+        ):
+            with self.subTest(source=source):
+                self._assert_dynamic_rejected(source)
 
     def test_exec_eval_and_compile_fail_closed(self):
         for source in (
@@ -78,17 +106,7 @@ class ReleaseRuntimeImportClosureTests(unittest.TestCase):
             "compile(\"import hidden\", '<x>', 'exec')\n",
         ):
             with self.subTest(source=source):
-                td, repo = self._repo({"entry.py": source})
-                try:
-                    with mock.patch.object(
-                        gate,
-                        "PINNED_RUNTIME_BLOBS",
-                        {"entry.py": gate._blob_sha(repo, "governance-runtime/entry.py")},
-                    ), mock.patch.object(gate, "ENTRY_POINTS", frozenset({"entry.py"})):
-                        with self.assertRaisesRegex(AssertionError, "dynamic import/execution construct forbidden"):
-                            gate.verify_repo(repo)
-                finally:
-                    td.cleanup()
+                self._assert_dynamic_rejected(source)
 
     def test_unpinned_local_package_import_fails_closed(self):
         td, repo = self._repo({
