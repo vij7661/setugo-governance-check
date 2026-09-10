@@ -1,0 +1,149 @@
+name: Package R11 Full Independent Review V2
+
+on:
+  push:
+    branches:
+      - package/r11-full-review
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout packaging branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Build self-contained plain-text packet
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: 15d50cc25ae524fc64e2c65269c91135e0361846
+          CHECKER_SHA: c5dc3a69e1a62a55555021d553934c6dcbb476aa
+          ROOT_SHA: 5f470774ec8c17f5519da8db2aaae59af114cef9
+          EXTERNAL_RUN: '34488506619'
+          LOCAL_RUN: '34488207164'
+          APP_CHECK: '102908925653'
+          SELFTEST_RUN: '34488506669'
+        run: |
+          set -euo pipefail
+          OUT="$GITHUB_WORKSPACE/TESTING-QUALIFICATION-R11-FULL-REVIEW-15d50cc2-DEEPSEEK.txt"
+          WORK="$RUNNER_TEMP/r11-full-packet"
+          rm -rf "$WORK" && mkdir -p "$WORK"
+
+          git clone -q https://github.com/vij7661/setugo-ai-development-framework.git "$WORK/candidate"
+          git -C "$WORK/candidate" checkout -q --detach "$CANDIDATE_SHA"
+          test "$(git -C "$WORK/candidate" rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git clone -q https://github.com/vij7661/setugo-governance-check.git "$WORK/checker"
+          git -C "$WORK/checker" checkout -q --detach "$CHECKER_SHA"
+          test "$(git -C "$WORK/checker" rev-parse HEAD)" = "$CHECKER_SHA"
+          git clone -q https://github.com/vij7661/setugo-governance-root.git "$WORK/root"
+          git -C "$WORK/root" checkout -q --detach "$ROOT_SHA"
+          test "$(git -C "$WORK/root" rev-parse HEAD)" = "$ROOT_SHA"
+
+          cat > "$OUT" <<EOF
+          INDEPENDENT FALSIFICATION REVIEW REQUEST — R11 FULL SELF-CONTAINED PACKET
+
+          Authority effect: NONE_EVIDENCE_ONLY
+          Review posture: assume false-green until proven otherwise.
+
+          EXACT SUBJECTS
+          candidate_repository=vij7661/setugo-ai-development-framework
+          candidate_sha=$CANDIDATE_SHA
+          checker_repository=vij7661/setugo-governance-check
+          checker_sha=$CHECKER_SHA
+          external_root_repository=vij7661/setugo-governance-root
+          external_root_sha=$ROOT_SHA
+          local_testing_run=$LOCAL_RUN
+          external_regression_run=$EXTERNAL_RUN
+          dedicated_app_check=$APP_CHECK
+          checker_selftest_run=$SELFTEST_RUN
+
+          REVIEW PURPOSE
+          This packet supersedes the earlier thin R10 delta packet that correctly received INSUFFICIENT_EVIDENCE. The first R11 packet-build attempt also failed closed on a cross-repository Actions-log 403 and was not handed to the reviewer. This V2 packet removes that unavailable cross-repository raw-log dependency while retaining exact local-run metadata/check evidence and full raw external-checker logs.
+
+          REQUIRED REVIEW
+          1. Re-falsify R11-01 through R11-10 and exact-SHA local-evidence repair 012.
+          2. Verify complete executed checker chain and bind every checker file to exact checker commit $CHECKER_SHA.
+          3. Verify complete 15-file candidate qualification-test blob closure, including three bridge-imported modules.
+          4. Verify async/generator/returned-awaitable paths fail closed and synchronous zero-argument top-level tests execute.
+          5. Verify command-shape changes, unittest discovery, pytest/conftest/plugins, unknown tests, and candidate stdlib namespace collisions cannot bypass isolated checker-owned execution.
+          6. Verify exact candidate lineage and no stale PASS/review replay to $CANDIDATE_SHA.
+          7. Verify fresh exact-SHA local evidence and exact-SHA external App evidence both bind to $CANDIDATE_SHA.
+          8. Verify emitted App check head_sha and external_id bind exact candidate and checker revision.
+          9. Search for any new material false-green path.
+          10. Treat all workflows/checks/signatures/reviewer/model outputs as evidence only. Do not grant TESTING, RELEASE, or PRODUCTION authority.
+
+          Return exactly one final disposition: TESTING_RULES_PASS, TESTING_RULES_BOUNDED_PASS, CHANGES_REQUIRED, or INSUFFICIENT_EVIDENCE.
+          For every finding provide ID, severity, exact failure path, TESTING-blocking yes/no, and evidence relied upon.
+          EOF
+
+          append_file() {
+            repo="$1"; rel="$2"; label="$3"; full="$WORK/$repo/$rel"
+            test -f "$full" || { printf '\nMISSING REQUIRED FILE: %s/%s\n' "$repo" "$rel" >> "$OUT"; exit 1; }
+            blob="$(git -C "$WORK/$repo" hash-object "$rel")"
+            sha256="$(sha256sum "$full" | awk '{print $1}')"
+            bytes="$(wc -c < "$full" | tr -d ' ')"
+            printf '\n================================================================\nBEGIN FILE: %s\nREPO: %s\nPATH: %s\nGIT_BLOB_SHA1: %s\nSHA256: %s\nBYTES: %s\n----------------------------------------------------------------\n' "$label" "$repo" "$rel" "$blob" "$sha256" "$bytes" >> "$OUT"
+            cat "$full" >> "$OUT"
+            printf '\nEND FILE: %s\n================================================================\n' "$label" >> "$OUT"
+          }
+
+          append_api() {
+            url="$1"; label="$2"
+            printf '\n================================================================\nBEGIN API EVIDENCE: %s\nURL: %s\n----------------------------------------------------------------\n' "$label" "$url" >> "$OUT"
+            curl -fsSL -H 'Accept: application/vnd.github+json' "$url" >> "$OUT"
+            printf '\nEND API EVIDENCE: %s\n================================================================\n' "$label" >> "$OUT"
+          }
+
+          append_same_repo_log() {
+            url="$1"; label="$2"
+            printf '\n================================================================\nBEGIN RAW JOB LOG: %s\nURL: %s\n----------------------------------------------------------------\n' "$label" "$url" >> "$OUT"
+            curl -fsSL -L -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "$url" >> "$OUT"
+            printf '\nEND RAW JOB LOG: %s\n================================================================\n' "$label" >> "$OUT"
+          }
+
+          for f in checker/falsify_candidate.py checker/falsify_candidate_entry.py checker/falsify_candidate_r9_entry.py checker/falsify_candidate_r10_entry.py checker/run_candidate_unittests_isolated.py checker/test_r11_harness.py .github/workflows/r10-regression.yml .github/workflows/r11-checker-selftest.yml evidence/R11-INDEPENDENT-REVIEW-HARNESS-PREREG.md evidence/phase-testing-ruleset-22736961.attestation.json evidence/phase-testing-ruleset-22736961.attestation.sig.b64; do append_file checker "$f" "CHECKER/$f"; done
+
+          for f in governance-runtime/repair-preregistrations/TESTING-QUALIFICATION-INDEPENDENT-REVIEW-CLOSURE-011.md governance-runtime/repair-preregistrations/TESTING-QUALIFICATION-EXACT-SHA-LOCAL-EVIDENCE-012.md .github/workflows/testing-qualification-boundary-ownership.yml governance-runtime/qualification_boundary_policy_v4.py governance-runtime/qualification_boundary_policy.py governance-runtime/manual_authority_verifier.py governance-runtime/external_governance_root.py governance-runtime/phase_policy.py governance-runtime/test_phase_policy.py governance-runtime/test_manual_authority_verifier.py governance-runtime/test_manual_authority_signed_attestation.py governance-runtime/test_external_governance_root.py governance-runtime/test_external_root_policy_binding.py governance-runtime/test_external_trust_root_control.py governance-runtime/test_qualification_boundary_unittest_bridge.py governance-runtime/test_review_protocol.py governance-runtime/test_review_semantics.py governance-runtime/test_review_classification.py governance-runtime/test_single_file_review_container.py governance-runtime/test_platform_candidate_review_request_integrity.py governance-runtime/test_qualification_boundary_policy.py governance-runtime/test_manual_review_authority_spoofing_regression.py governance-runtime/test_manual_review_authority_ingress_regression.py governance-runtime/manual-attestations/ed265f37487bccffcc5f4463f5f3b62ee9f2b713.acceptance-boundary.json governance-runtime/manual-attestations/ed265f37487bccffcc5f4463f5f3b62ee9f2b713.acceptance-boundary.sig.b64; do append_file candidate "$f" "CANDIDATE/$f"; done
+
+          append_file root trust-roots/SETUGO_MANUAL_GOVERNANCE_ED25519_V1.pem ROOT/public-key.pem
+          append_file root trust-roots/SETUGO_MANUAL_GOVERNANCE_ED25519_V1.json ROOT/root-metadata.json
+
+          append_api "https://api.github.com/repos/vij7661/setugo-ai-development-framework/commits/$CANDIDATE_SHA" CANDIDATE/exact-commit
+          append_api "https://api.github.com/repos/vij7661/setugo-ai-development-framework/pulls/31" CANDIDATE/PR31-R10
+          append_api "https://api.github.com/repos/vij7661/setugo-ai-development-framework/pulls/33" CANDIDATE/PR33-R11-preservation
+          append_api "https://api.github.com/repos/vij7661/setugo-ai-development-framework/pulls/34" CANDIDATE/PR34-local-evidence-trigger-repair
+          append_api "https://api.github.com/repos/vij7661/setugo-ai-development-framework/actions/runs/$LOCAL_RUN" CANDIDATE/exact-local-run
+          append_api "https://api.github.com/repos/vij7661/setugo-ai-development-framework/commits/$CANDIDATE_SHA/check-runs" CANDIDATE/all-exact-SHA-check-runs
+          append_api "https://api.github.com/repos/vij7661/setugo-ai-development-framework/check-runs/$APP_CHECK" CANDIDATE/dedicated-App-check
+          append_api "https://api.github.com/repos/vij7661/setugo-ai-development-framework/rulesets/22736961" CANDIDATE/live-ruleset
+          append_api "https://api.github.com/repos/vij7661/setugo-governance-check/commits/$CHECKER_SHA" CHECKER/exact-commit
+          append_api "https://api.github.com/repos/vij7661/setugo-governance-check/actions/runs/$EXTERNAL_RUN" CHECKER/external-regression-run
+          append_api "https://api.github.com/repos/vij7661/setugo-governance-check/actions/runs/$SELFTEST_RUN" CHECKER/harness-selftest-run
+          append_api "https://api.github.com/repos/vij7661/setugo-governance-root" ROOT/live-repository-metadata
+          append_api "https://api.github.com/repos/vij7661/setugo-governance-root/commits/$ROOT_SHA" ROOT/exact-commit
+
+          append_same_repo_log "https://api.github.com/repos/vij7661/setugo-governance-check/actions/jobs/102908847249/logs" R10-A-unittest-shadow-attack
+          append_same_repo_log "https://api.github.com/repos/vij7661/setugo-governance-check/actions/jobs/102908847234/logs" R10-B-bridge-pin-substitution-attack
+          append_same_repo_log "https://api.github.com/repos/vij7661/setugo-governance-check/actions/jobs/102908847063/logs" R11-exact-merged-successor
+          SELFTEST_JOB="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/vij7661/setugo-governance-check/actions/runs/$SELFTEST_RUN/jobs" | jq -r '.jobs[0].id')"
+          test "$SELFTEST_JOB" != null
+          append_same_repo_log "https://api.github.com/repos/vij7661/setugo-governance-check/actions/jobs/$SELFTEST_JOB/logs" R11-checker-harness-selftest
+
+          printf '\n================================================================\nPACKET FINAL MANIFEST\n----------------------------------------------------------------\n' >> "$OUT"
+          printf 'candidate_sha=%s\nchecker_sha=%s\nroot_sha=%s\nlocal_run=%s\nexternal_run=%s\napp_check=%s\nauthority_effect=NONE_EVIDENCE_ONLY\nEND PACKET\n' "$CANDIDATE_SHA" "$CHECKER_SHA" "$ROOT_SHA" "$LOCAL_RUN" "$EXTERNAL_RUN" "$APP_CHECK" >> "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          wc -c "$OUT"
+
+      - name: Upload plain-text packet artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: r11-full-deepseek-packet-v2
+          path: |
+            TESTING-QUALIFICATION-R11-FULL-REVIEW-15d50cc2-DEEPSEEK.txt
+            TESTING-QUALIFICATION-R11-FULL-REVIEW-15d50cc2-DEEPSEEK.txt.sha256
+          if-no-files-found: error
+          retention-days: 7
