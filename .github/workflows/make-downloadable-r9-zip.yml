@@ -1,0 +1,34 @@
+name: Make downloadable R9 review ZIP
+
+on:
+  push:
+    branches:
+      - package/review-af3b21fc
+    paths:
+      - '.github/workflows/make-downloadable-r9-zip.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout package branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: package/review-af3b21fc
+
+      - name: Create ZIP and commit it
+        run: |
+          set -euo pipefail
+          TXT='TESTING-QUALIFICATION-R9-REVIEW-af3b21fc-DEEPSEEK.txt'
+          ZIP='TESTING-QUALIFICATION-R9-REVIEW-af3b21fc-DEEPSEEK.zip'
+          test -s "$TXT"
+          rm -f "$ZIP"
+          zip -9 "$ZIP" "$TXT"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$ZIP"
+          git commit -m 'Add downloadable R9 review ZIP [packet-download]'
+          git push origin HEAD:package/review-af3b21fc
