@@ -7,6 +7,8 @@ Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -25,6 +27,10 @@ r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update({
 })
 
 QUALIFICATION_TEST_FILES = frozenset(r9.EXPECTED_QUALIFICATION_TEST_BLOBS)
+# RELEASE wrappers may set this checker-owned exact map. The isolated runner then
+# enforces it against candidate-local imports actually observed during execution.
+RUNTIME_PINNED_BLOBS: dict[str, str] = {}
+
 STDLIB_NAMES = frozenset(getattr(sys, "stdlib_module_names", ()))
 if not STDLIB_NAMES:
     raise RuntimeError("interpreter does not expose a comprehensive stdlib module-name set")
@@ -40,7 +46,6 @@ def _candidate_module_name(path: Path) -> str | None:
         return name[:-3]
     if name.endswith((".pyc", ".pyo")):
         return name.split(".", 1)[0]
-    # Extension modules can include ABI tags after the module name.
     if name.endswith((".so", ".pyd", ".dll", ".dylib")):
         return name.split(".", 1)[0]
     return None
@@ -61,6 +66,11 @@ def _looks_like_test_runner(cmd: list[str]) -> bool:
     lowered = [str(part).lower() for part in cmd]
     markers = ("unittest", "pytest", "py.test", "nose", "nose2", "discover")
     return any(any(marker == token or marker in token for marker in markers) for token in lowered)
+
+
+def _manifest_b64() -> str:
+    raw = json.dumps(RUNTIME_PINNED_BLOBS, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return base64.b64encode(raw).decode("ascii")
 
 
 def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
@@ -84,8 +94,12 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
         bootstrap = Path(__file__).resolve().with_name("run_candidate_unittests_isolated.py")
         if not bootstrap.is_file():
             raise AssertionError("checker-owned isolated qualification runner is missing")
+        runner_cmd = [sys.executable, "-I", str(bootstrap), str(runtime)]
+        if RUNTIME_PINNED_BLOBS:
+            runner_cmd.extend(["--runtime-pin-manifest-b64", _manifest_b64()])
+        runner_cmd.extend(explicit_test_args)
         subprocess.run(
-            [sys.executable, "-I", str(bootstrap), str(runtime), *explicit_test_args],
+            runner_cmd,
             cwd=checker.CHECKER_ROOT,
             env={"PATH": str(Path(sys.executable).resolve().parent) + ":/usr/local/bin:/usr/bin:/bin"},
             check=True,
