@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from urllib.request import Request, urlopen
 
 CANDIDATE_REPO = "vij7661/setugo-ai-development-framework"
-CANDIDATE_SHA = "b0b843356bb3d281e525284d85f79204ba9d4460"
+CANDIDATE_SHA = "82782136fcbff465cddaf7b9832eafd2283fd892"
 PR_NUMBER = 37
 REQUIRED_BASE = "phase/release"
 
