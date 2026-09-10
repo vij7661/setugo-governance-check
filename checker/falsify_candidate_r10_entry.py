@@ -18,6 +18,7 @@ import falsify_candidate_r9_entry as r9
 
 checker = r9.checker
 _original_run = checker.run
+_original_dependency_closure = checker.verify_authority_critical_dependency_closure
 
 # These modules contribute to qualification through the pinned unittest bridge and
 # therefore must be independently blob-pinned as part of the external test closure.
@@ -26,6 +27,33 @@ r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update({
     "test_manual_review_authority_spoofing_regression.py": "7c33e04883931a17bc50cfccba00363a8af461c0",
     "test_manual_review_authority_ingress_regression.py": "62980bcd63f398cd9209c015c8a2c66af9829e26",
 })
+
+# The isolated runner below is the primary protection against import-precedence
+# attacks. This structural check is additional frozen-attack evidence: a candidate
+# revision that deliberately introduces a shadow for a stdlib module used by the
+# qualification harness must itself fail closed instead of merely being harmless.
+SENSITIVE_STDLIB_NAMES = (
+    "unittest",
+    "json",
+    "hashlib",
+    "importlib",
+    "pathlib",
+    "subprocess",
+    "tempfile",
+    "base64",
+)
+
+
+def _verify_r10_dependency_closure(root: Path):
+    result = _original_dependency_closure(root)
+    runtime = root / "governance-runtime"
+    for name in SENSITIVE_STDLIB_NAMES:
+        candidates = (runtime / f"{name}.py", runtime / name)
+        for path in candidates:
+            if path.exists():
+                rel = path.relative_to(root)
+                raise AssertionError(f"R10-A candidate stdlib shadow file present: {rel}")
+    return result
 
 
 def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
@@ -57,6 +85,7 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
     )
 
 
+checker.verify_authority_critical_dependency_closure = _verify_r10_dependency_closure
 checker.run = _isolating_run
 
 if __name__ == "__main__":
