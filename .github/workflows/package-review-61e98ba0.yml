@@ -1,0 +1,85 @@
+name: Package TESTING review 61e98ba0
+
+on:
+  push:
+    branches:
+      - package/review-61e98ba0
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact single-file review packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_SHA='61e98ba0ca8fc461b407e91e4f60ffc687fc784e'
+          ROOT_SHA='5f470774ec8c17f5519da8db2aaae59af114cef9'
+          CHECKER_SHA='b42fb00a03a41b6eea9a233bc8281de081649cc0'
+          rm -rf /tmp/candidate /tmp/root /tmp/checker
+          git clone -q https://github.com/vij7661/setugo-ai-development-framework.git /tmp/candidate
+          git -C /tmp/candidate checkout -q "$CANDIDATE_SHA"
+          git clone -q https://github.com/vij7661/setugo-governance-root.git /tmp/root
+          git -C /tmp/root checkout -q "$ROOT_SHA"
+          git clone -q https://github.com/vij7661/setugo-governance-check.git /tmp/checker
+          git -C /tmp/checker checkout -q "$CHECKER_SHA"
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          candidate = Path('/tmp/candidate')
+          root = Path('/tmp/root')
+          checker = Path('/tmp/checker')
+          out = Path('TESTING-QUALIFICATION-REVIEW-61e98ba0-DEEPSEEK.txt')
+          items = []
+          def add(label, base, rel):
+              p = base / rel
+              data = p.read_bytes()
+              items.append((label, rel, data))
+
+          candidate_files = [
+              'governance-runtime/qualification_boundary_policy_v4.py',
+              'governance-runtime/manual_authority_verifier.py',
+              'governance-runtime/external_governance_root.py',
+              'governance-runtime/qualification_boundary_policy.py',
+              'governance-runtime/test_qualification_boundary_policy.py',
+              'governance-runtime/test_manual_authority_signed_attestation.py',
+              'governance-runtime/test_external_governance_root.py',
+              'governance-runtime/test_external_root_policy_binding.py',
+              'governance-runtime/verify_external_trust_root_control.py',
+              'governance-runtime/test_external_trust_root_control.py',
+              'governance-runtime/test_qualification_boundary_unittest_bridge.py',
+              'governance-runtime/repair-preregistrations/TESTING-QUALIFICATION-INDEPENDENT-REFALSIFICATION-007.md',
+              'governance-runtime/failures/TESTING-QUALIFICATION-INDEPENDENT-REFALSIFICATION-RED-001.md',
+              '.github/workflows/testing-qualification-boundary-ownership.yml',
+              'standards/qualification-boundary-ownership.md',
+          ]
+          for rel in candidate_files:
+              if (candidate / rel).exists(): add('CANDIDATE', candidate, rel)
+
+          for rel in ['README.md','trust-roots/SETUGO_MANUAL_GOVERNANCE_ED25519_V1.pem','trust-roots/SETUGO_MANUAL_GOVERNANCE_ED25519_V1.json']:
+              if (root / rel).exists(): add('EXTERNAL_ROOT', root, rel)
+
+          for rel in ['checker/falsify_candidate.py','.github/workflows/external-qualification.yml','README.md']:
+              if (checker / rel).exists(): add('EXTERNAL_CHECKER', checker, rel)
+
+          header = '''INDEPENDENT TESTING RE-FALSIFICATION PACKET\n\nCandidate repository: vij7661/setugo-ai-development-framework\nCandidate exact SHA: 61e98ba0ca8fc461b407e91e4f60ffc687fc784e\nExternal governance root exact SHA: 5f470774ec8c17f5519da8db2aaae59af114cef9\nExternal checker exact SHA used for the post-merge check: b42fb00a03a41b6eea9a233bc8281de081649cc0\n\nReview posture: assume false-green until disproven. Re-test the six DeepSeek findings R7-01..R7-06 and search for new false-green paths. Treat all CI, GitHub App checks, signatures, and reviewer outputs as evidence only, never terminal authority. Return one disposition: TESTING_RULES_PASS, TESTING_RULES_BOUNDED_PASS, CHANGES_REQUIRED, or INSUFFICIENT_EVIDENCE. Identify exact failure paths and severity.\n\n'''
+          with out.open('wb') as f:
+              f.write(header.encode())
+              for label, rel, data in items:
+                  sha = hashlib.sha256(data).hexdigest()
+                  f.write((f'\n===== BEGIN {label}:{rel} =====\nBYTE_LENGTH={len(data)}\nSHA256={sha}\n').encode())
+                  f.write(data)
+                  if not data.endswith(b'\n'): f.write(b'\n')
+                  f.write((f'===== END {label}:{rel} =====\n').encode())
+          print(f'packet={out} bytes={out.stat().st_size} files={len(items)} sha256={hashlib.sha256(out.read_bytes()).hexdigest()}')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TESTING-QUALIFICATION-REVIEW-61e98ba0-DEEPSEEK
+          path: TESTING-QUALIFICATION-REVIEW-61e98ba0-DEEPSEEK.txt
+          if-no-files-found: error
