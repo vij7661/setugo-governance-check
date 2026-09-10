@@ -36,10 +36,19 @@ jobs:
             test_release_current_binding.py \
             test_release_runtime_import_closure.py \
             test_release_runtime_execution_guard.py \
-            test_release_runtime_capability_semantics.py
+            test_release_runtime_capability_semantics.py \
+            test_release_runtime_test_root_closure.py
 
-      - name: Run hardened closure against exact frozen RELEASE candidate
+      - name: Run configured closure against exact frozen RELEASE candidate
         working-directory: checker
         run: |
           set -euo pipefail
-          python verify_release_runtime_import_closure.py
+          python - <<'PY'
+          import falsify_candidate_release_current as current
+          graph = current.runtime_closure.verify(current.CURRENT_RELEASE_CANDIDATE_SHA)
+          if not graph:
+              raise SystemExit('configured RELEASE closure returned no audited graph')
+          for source, targets in graph.items():
+              print(source + ' -> ' + ','.join(targets))
+          print('RELEASE_CONFIGURED_RUNTIME_AND_TEST_IMPORT_CLOSURE_PASS')
+          PY
