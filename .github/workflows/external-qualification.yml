@@ -30,15 +30,6 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
           printf 'checker_sha=%s\n' "$GITHUB_SHA"
 
-      - name: Run external falsifier
-        id: falsify
-        continue-on-error: true
-        shell: bash
-        run: |
-          python checker/falsify_candidate.py \
-            --repo vij7661/setugo-ai-development-framework \
-            --sha '${{ inputs.candidate_sha }}' | tee result.json
-
       - name: Create GitHub App installation token
         id: app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
@@ -47,6 +38,17 @@ jobs:
           private-key: ${{ secrets.SETUGO_GOVERNANCE_APP_PRIVATE_KEY }}
           owner: vij7661
           repositories: setugo-ai-development-framework
+
+      - name: Run external falsifier
+        id: falsify
+        continue-on-error: true
+        shell: bash
+        env:
+          GOVERNANCE_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python checker/falsify_candidate.py \
+            --repo vij7661/setugo-ai-development-framework \
+            --sha '${{ inputs.candidate_sha }}' | tee result.json
 
       - name: Publish external qualification check
         env:

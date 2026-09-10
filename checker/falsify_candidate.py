@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -58,11 +59,18 @@ def assert_equal(actual, expected, label: str) -> None:
         raise AssertionError(f"{label} mismatch: {actual!r} != {expected!r}")
 
 
-def github_json(url: str) -> dict[str, object]:
-    request = urllib.request.Request(
-        url,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "setugo-governance-check"},
-    )
+def github_json(url: str, *, require_app_token: bool = False) -> dict[str, object]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "setugo-governance-check",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("GOVERNANCE_GITHUB_TOKEN", "").strip()
+    if require_app_token and not token:
+        raise AssertionError("GitHub App token required for authoritative ruleset evidence")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=20) as response:
         value = json.load(response)
     if not isinstance(value, dict):
@@ -142,9 +150,12 @@ def verify_live_external_root(work: Path) -> None:
 
 
 def verify_live_candidate_ruleset() -> None:
-    # R8-02/R8-07: branch-governance evidence is checked outside the candidate tree.
+    # R8-02/R8-07: use the dedicated GitHub App token with Administration:read so
+    # bypass actors and required-check integration binding are evaluated outside
+    # the candidate tree. Missing/unobservable fields fail closed.
     ruleset = github_json(
-        f"https://api.github.com/repos/{TARGET_REPOSITORY}/rulesets/{EXPECTED_RULESET_ID}"
+        f"https://api.github.com/repos/{TARGET_REPOSITORY}/rulesets/{EXPECTED_RULESET_ID}",
+        require_app_token=True,
     )
     assert_equal(ruleset.get("id"), EXPECTED_RULESET_ID, "ruleset id")
     assert_equal(ruleset.get("name"), EXPECTED_RULESET_NAME, "ruleset name")
@@ -192,7 +203,6 @@ def verify_live_candidate_ruleset() -> None:
         [{"context": EXPECTED_EXTERNAL_CHECK_CONTEXT, "integration_id": EXPECTED_EXTERNAL_CHECK_APP_ID}],
         "dedicated external App source binding",
     )
-    # Candidate GitHub Actions may remain as construction evidence, but it is not the external authority source.
     if any(item.get("context") == EXPECTED_EXTERNAL_CHECK_CONTEXT and item.get("integration_id") == EXPECTED_GITHUB_ACTIONS_APP_ID
            for item in checks if isinstance(item, dict)):
         raise AssertionError("external governance context is incorrectly source-bound to GitHub Actions")
@@ -242,7 +252,6 @@ def falsify(repo: str, sha: str) -> dict[str, object]:
         policy = load_runtime_facade(facade_path)
         assert_equal(policy.POLICY_VERSION, 6, "externally pinned qualification policy version")
 
-        # R7-01/R8-01: naked caller-controlled labels/booleans cannot authorize.
         allowed, _ = policy.terminal_authority_allowed(
             phase="TESTING",
             action="READY_TO_BEGIN_RELEASE_QUALIFICATION",
@@ -260,7 +269,6 @@ def falsify(repo: str, sha: str) -> dict[str, object]:
         assert_equal(ext.EXPECTED_PUBLIC_KEY_DER_SHA256, EXPECTED_EXTERNAL_ROOT_DER_SHA256, "external root key fingerprint")
         assert_equal(dict(policy.GOVERNED_RULE_PHASES), EXPECTED_RULE_PHASES, "governed rule phase map")
 
-        # Candidate tests remain execution evidence, never the authority source.
         run([
             sys.executable, "-m", "unittest", "-v",
             "test_phase_policy.py",
