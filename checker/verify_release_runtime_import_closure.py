@@ -4,8 +4,9 @@
 This verifier never trusts candidate declarations about its dependency closure.
 It checks exact Git blobs for every allowed authority-relevant runtime module,
 statically walks candidate-local imports from every entry point, rejects any
-reachable local module outside the allowlist, and rejects dynamic import calls
-inside the governed closure. Passing is evidence only.
+reachable local module or package outside the allowlist, and rejects dynamic
+import/eval-style execution constructs inside the governed closure. Passing is
+evidence only.
 """
 from __future__ import annotations
 
@@ -50,19 +51,35 @@ def _blob_sha(repo: Path, relpath: str) -> str:
     return parts[2]
 
 
-def _local_module_file(runtime: Path, module_name: str) -> Path | None:
+def _local_module_relpath(runtime: Path, module_name: str) -> str | None:
+    """Resolve a candidate-local top-level module/package to a runtime-relative path.
+
+    Flat modules resolve to ``name.py``. Packages resolve to
+    ``name/__init__.py``. Any resolved local path still has to be explicitly
+    present in ``PINNED_RUNTIME_BLOBS``; discovery never grants trust.
+    """
     if not module_name:
         return None
     root = module_name.split(".", 1)[0]
-    candidate = runtime / f"{root}.py"
-    return candidate if candidate.is_file() else None
+    module_file = runtime / f"{root}.py"
+    if module_file.is_file():
+        return f"{root}.py"
+    package_init = runtime / root / "__init__.py"
+    if package_init.is_file():
+        return f"{root}/__init__.py"
+    return None
 
 
 def _dynamic_import_call(node: ast.Call) -> bool:
     fn = node.func
     if isinstance(fn, ast.Name) and fn.id in {"__import__", "import_module"}:
         return True
-    return isinstance(fn, ast.Attribute) and fn.attr == "import_module"
+    return isinstance(fn, ast.Attribute) and fn.attr in {"import_module", "__import__"}
+
+
+def _dynamic_execution_call(node: ast.Call) -> bool:
+    fn = node.func
+    return isinstance(fn, ast.Name) and fn.id in {"exec", "eval", "compile"}
 
 
 def _imports_and_dynamic_calls(path: Path) -> tuple[set[str], list[int]]:
@@ -74,7 +91,9 @@ def _imports_and_dynamic_calls(path: Path) -> tuple[set[str], list[int]]:
             imported.update(alias.name.split(".", 1)[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".", 1)[0])
-        elif isinstance(node, ast.Call) and _dynamic_import_call(node):
+        elif isinstance(node, ast.Call) and (
+            _dynamic_import_call(node) or _dynamic_execution_call(node)
+        ):
             dynamic_lines.append(getattr(node, "lineno", -1))
     return imported, dynamic_lines
 
@@ -84,40 +103,43 @@ def verify_repo(repo: Path) -> dict[str, list[str]]:
     if not runtime.is_dir():
         raise AssertionError("candidate governance-runtime directory missing")
 
-    for filename, expected_blob in PINNED_RUNTIME_BLOBS.items():
-        relpath = f"{RUNTIME_DIR}/{filename}"
+    for runtime_relpath, expected_blob in PINNED_RUNTIME_BLOBS.items():
+        relpath = f"{RUNTIME_DIR}/{runtime_relpath}"
         actual = _blob_sha(repo, relpath)
         if actual != expected_blob:
-            raise AssertionError(f"runtime closure blob mismatch: {relpath}: {actual} != {expected_blob}")
+            raise AssertionError(
+                f"runtime closure blob mismatch: {relpath}: {actual} != {expected_blob}"
+            )
 
     visited: set[str] = set()
     edges: dict[str, list[str]] = {}
     queue = list(sorted(ENTRY_POINTS))
     while queue:
-        filename = queue.pop(0)
-        if filename in visited:
+        runtime_relpath = queue.pop(0)
+        if runtime_relpath in visited:
             continue
-        visited.add(filename)
-        path = runtime / filename
+        visited.add(runtime_relpath)
+        path = runtime / runtime_relpath
         imports, dynamic_lines = _imports_and_dynamic_calls(path)
         if dynamic_lines:
             raise AssertionError(
-                f"dynamic import construct forbidden in governed runtime closure: {filename}:{dynamic_lines}"
+                "dynamic import/execution construct forbidden in governed runtime closure: "
+                f"{runtime_relpath}:{dynamic_lines}"
             )
         local_targets: list[str] = []
         for module in sorted(imports):
-            local = _local_module_file(runtime, module)
-            if local is None:
+            target = _local_module_relpath(runtime, module)
+            if target is None:
                 continue
-            target = local.name
             if target not in PINNED_RUNTIME_BLOBS:
                 raise AssertionError(
-                    f"unpinned candidate-local import reachable from governed runtime: {filename} -> {target}"
+                    "unpinned candidate-local import reachable from governed runtime: "
+                    f"{runtime_relpath} -> {target}"
                 )
             local_targets.append(target)
             if target not in visited:
                 queue.append(target)
-        edges[filename] = local_targets
+        edges[runtime_relpath] = local_targets
 
     missing = set(PINNED_RUNTIME_BLOBS) - visited
     if missing:
@@ -130,7 +152,10 @@ def verify(candidate_sha: str = CANDIDATE_SHA) -> dict[str, list[str]]:
         raise AssertionError("runtime closure verifier is not bound to exact RELEASE candidate")
     with tempfile.TemporaryDirectory(prefix="setugo-release-import-closure-") as td:
         repo = Path(td) / "candidate"
-        subprocess.run(["git", "clone", "--no-checkout", "--filter=blob:none", CANDIDATE_REPO, str(repo)], check=True)
+        subprocess.run(
+            ["git", "clone", "--no-checkout", "--filter=blob:none", CANDIDATE_REPO, str(repo)],
+            check=True,
+        )
         subprocess.run(["git", "fetch", "--depth=1", "origin", candidate_sha], cwd=repo, check=True)
         subprocess.run(["git", "checkout", "--detach", candidate_sha], cwd=repo, check=True)
         actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
