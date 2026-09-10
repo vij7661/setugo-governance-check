@@ -38,7 +38,7 @@ jobs:
           set -euo pipefail
           set +e
           python verify_release_merge_authority.py \
-            --candidate b0b843356bb3d281e525284d85f79204ba9d4460 \
+            --candidate 82782136fcbff465cddaf7b9832eafd2283fd892 \
             > absent-authority.json
           rc=$?
           set -e
