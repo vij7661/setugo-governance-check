@@ -26,22 +26,33 @@ release.RELEASE_REQUIRED_CHECKS = frozenset(
 )
 runtime_closure.CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
 
-# The runtime execution guard must cover every exact-pinned candidate-local file
-# that can legitimately execute during qualification, regardless of whether it
-# belongs to the static runtime import-closure set or the separately pinned
-# extra-execution set. Derive this map from the authoritative checker pin sets;
-# never maintain a third handwritten allowlist.
+# Runtime execution must be authorized by an existing checker-owned exact pin,
+# regardless of whether the file is production runtime, an extra execution
+# helper, or a qualification test/helper imported by another pinned test.
+# Derive one execution manifest from all authoritative pin sets; never maintain
+# a separate handwritten runtime allowlist.
 _runtime_execution_pins = dict(runtime_closure.PINNED_RUNTIME_BLOBS)
+
+
+def _add_runtime_pin(runtime_relpath: str, blob: str) -> None:
+    existing = _runtime_execution_pins.get(runtime_relpath)
+    if existing is not None and existing != blob:
+        raise RuntimeError(
+            f"conflicting runtime pin for {runtime_relpath}: {existing} != {blob}"
+        )
+    _runtime_execution_pins[runtime_relpath] = blob
+
+
 for relpath, blob in release.EXTRA_EXECUTION_BLOBS.items():
     prefix = "governance-runtime/"
     if relpath.startswith(prefix):
-        runtime_relpath = relpath[len(prefix):]
-        existing = _runtime_execution_pins.get(runtime_relpath)
-        if existing is not None and existing != blob:
-            raise RuntimeError(
-                f"conflicting runtime pin for {runtime_relpath}: {existing} != {blob}"
-            )
-        _runtime_execution_pins[runtime_relpath] = blob
+        _add_runtime_pin(relpath[len(prefix):], blob)
+
+# The R10/R11 checker owns the exact qualification-test blob map. Tests are
+# executable candidate-local Python and may import one another (for example the
+# unittest bridge), so they are part of the execution authorization closure.
+for runtime_relpath, blob in release.r10.r9.EXPECTED_QUALIFICATION_TEST_BLOBS.items():
+    _add_runtime_pin(runtime_relpath, blob)
 
 release.r10.RUNTIME_PINNED_BLOBS = _runtime_execution_pins
 
