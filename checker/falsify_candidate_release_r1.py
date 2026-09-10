@@ -16,7 +16,7 @@ import tempfile
 
 import falsify_candidate_r10_entry as r10
 
-RELEASE_CANDIDATE_SHA = "35d0b2e85e0779eb582d7968f67b06e05a5b493d"
+RELEASE_CANDIDATE_SHA = "ffec566022fcd221fb4ab7569ed3bc245f75b546"
 CANDIDATE_REPO = "https://github.com/vij7661/setugo-ai-development-framework.git"
 
 RELEASE_TEST_BLOBS = {
