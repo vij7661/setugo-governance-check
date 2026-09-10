@@ -5,7 +5,7 @@ This verifier never trusts candidate declarations about its dependency closure.
 It checks exact Git blobs for every allowed authority-relevant runtime module,
 statically walks candidate-local imports from every entry point, rejects any
 reachable local module or package outside the allowlist, and rejects dynamic
-import/eval-style execution constructs inside the governed closure. Passing is
+import/lookup/execution capability inside the governed closure. Passing is
 evidence only.
 """
 from __future__ import annotations
@@ -34,6 +34,11 @@ PINNED_RUNTIME_BLOBS = {
 }
 
 ENTRY_POINTS = frozenset(PINNED_RUNTIME_BLOBS)
+FORBIDDEN_DYNAMIC_SYMBOLS = frozenset({
+    "__import__", "import_module", "exec", "eval", "compile", "getattr",
+})
+FORBIDDEN_DYNAMIC_MODULES = frozenset({"importlib", "runpy", "builtins"})
+FORBIDDEN_DYNAMIC_BASES = frozenset({"importlib", "builtins", "__builtins__"})
 
 
 def _blob_sha(repo: Path, relpath: str) -> str:
@@ -52,15 +57,16 @@ def _blob_sha(repo: Path, relpath: str) -> str:
 
 
 def _local_module_relpath(runtime: Path, module_name: str) -> str | None:
-    """Resolve a candidate-local top-level module/package to a runtime-relative path.
-
-    Flat modules resolve to ``name.py``. Packages resolve to
-    ``name/__init__.py``. Any resolved local path still has to be explicitly
-    present in ``PINNED_RUNTIME_BLOBS``; discovery never grants trust.
-    """
     if not module_name:
         return None
-    root = module_name.split(".", 1)[0]
+    parts = module_name.split(".")
+    module_file = runtime.joinpath(*parts).with_suffix(".py")
+    if module_file.is_file():
+        return module_file.relative_to(runtime).as_posix()
+    package_init = runtime.joinpath(*parts, "__init__.py")
+    if package_init.is_file():
+        return package_init.relative_to(runtime).as_posix()
+    root = parts[0]
     module_file = runtime / f"{root}.py"
     if module_file.is_file():
         return f"{root}.py"
@@ -70,32 +76,68 @@ def _local_module_relpath(runtime: Path, module_name: str) -> str | None:
     return None
 
 
-def _dynamic_import_call(node: ast.Call) -> bool:
-    fn = node.func
-    if isinstance(fn, ast.Name) and fn.id in {"__import__", "import_module"}:
+def _constant_string(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _attribute_root(node: ast.AST) -> str | None:
+    current = node
+    while isinstance(current, ast.Attribute):
+        current = current.value
+    return current.id if isinstance(current, ast.Name) else None
+
+
+def _forbidden_dynamic_node(node: ast.AST) -> bool:
+    # Direct builtin/dynamic symbol references are forbidden, including aliasing
+    # such as `fn = exec`. Ordinary methods with the same terminal name (for
+    # example `re.compile`) are not equivalent to the builtin capability.
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+        return node.id in FORBIDDEN_DYNAMIC_SYMBOLS
+
+    # Explicit dangerous-module attribute access is forbidden. Imports of these
+    # modules are independently forbidden below, so aliases cannot create a
+    # static bypass without already tripping that rule.
+    if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+        return (
+            node.attr in FORBIDDEN_DYNAMIC_SYMBOLS
+            and _attribute_root(node) in FORBIDDEN_DYNAMIC_BASES
+        )
+
+    # Reflective lookup itself is forbidden in authority-relevant runtime. This
+    # closes computed-string variants such as getattr(obj, 'ex' + 'ec').
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr":
         return True
-    return isinstance(fn, ast.Attribute) and fn.attr in {"import_module", "__import__"}
+
+    # Reject builtin dictionary dispatch, but do not confuse an unrelated
+    # application dictionary key named "compile" with Python's compile builtin.
+    if isinstance(node, ast.Subscript):
+        key = _constant_string(node.slice)
+        base = _attribute_root(node.value)
+        if isinstance(node.value, ast.Name):
+            base = node.value.id
+        return base in {"builtins", "__builtins__"} and key in FORBIDDEN_DYNAMIC_SYMBOLS
+    return False
 
 
-def _dynamic_execution_call(node: ast.Call) -> bool:
-    fn = node.func
-    return isinstance(fn, ast.Name) and fn.id in {"exec", "eval", "compile"}
-
-
-def _imports_and_dynamic_calls(path: Path) -> tuple[set[str], list[int]]:
+def _imports_and_forbidden_nodes(path: Path) -> tuple[set[str], list[int]]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imported: set[str] = set()
-    dynamic_lines: list[int] = []
+    forbidden_lines: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                imported.add(root)
+                if root in FORBIDDEN_DYNAMIC_MODULES:
+                    forbidden_lines.add(getattr(node, "lineno", -1))
         elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".", 1)[0])
-        elif isinstance(node, ast.Call) and (
-            _dynamic_import_call(node) or _dynamic_execution_call(node)
-        ):
-            dynamic_lines.append(getattr(node, "lineno", -1))
-    return imported, dynamic_lines
+            root = node.module.split(".", 1)[0]
+            imported.add(root)
+            if root in FORBIDDEN_DYNAMIC_MODULES:
+                forbidden_lines.add(getattr(node, "lineno", -1))
+        if _forbidden_dynamic_node(node):
+            forbidden_lines.add(getattr(node, "lineno", -1))
+    return imported, sorted(forbidden_lines)
 
 
 def verify_repo(repo: Path) -> dict[str, list[str]]:
@@ -120,11 +162,11 @@ def verify_repo(repo: Path) -> dict[str, list[str]]:
             continue
         visited.add(runtime_relpath)
         path = runtime / runtime_relpath
-        imports, dynamic_lines = _imports_and_dynamic_calls(path)
-        if dynamic_lines:
+        imports, forbidden_lines = _imports_and_forbidden_nodes(path)
+        if forbidden_lines:
             raise AssertionError(
-                "dynamic import/execution construct forbidden in governed runtime closure: "
-                f"{runtime_relpath}:{dynamic_lines}"
+                "dynamic import/lookup/execution capability forbidden in governed runtime closure: "
+                f"{runtime_relpath}:{forbidden_lines}"
             )
         local_targets: list[str] = []
         for module in sorted(imports):
