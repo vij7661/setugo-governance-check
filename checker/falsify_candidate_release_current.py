@@ -25,9 +25,10 @@ release.RELEASE_REQUIRED_CHECKS = frozenset(
     set(release.RELEASE_REQUIRED_CHECKS) | {REQUIRED_REVIEW_ADJUDICATION_CHECK}
 )
 runtime_closure.CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
-# The shared isolated runner is generic. RELEASE supplies the exact checker-owned
-# runtime map explicitly so every candidate-local module actually imported while
-# qualification tests execute must be present in this exact pin set.
+runtime_closure.QUALIFICATION_TEST_FILES = frozenset(release.r10.QUALIFICATION_TEST_FILES)
+# One exact checker-owned manifest now governs both static closure and runtime
+# observation. Any candidate-local helper imported by a pinned qualification
+# test must also be present in this map.
 release.r10.RUNTIME_PINNED_BLOBS = dict(runtime_closure.PINNED_RUNTIME_BLOBS)
 
 _original_extra_release_paths = release.verify_and_execute_extra_release_paths
