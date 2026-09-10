@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Checker-owned candidate-local dependency closure verifier for RELEASE.
 
-The verifier exact-pins all authority-relevant runtime modules, walks their
-candidate-local imports transitively, and can also treat every checker-selected,
-exact-pinned qualification test as an explicit import root. Any candidate-local
-helper reachable from those tests must be present in the same exact runtime
-manifest. Dynamic import/lookup/execution capability is rejected in governed
-runtime code. Passing is evidence only.
+Two checker-owned exact-pin namespaces are enforced:
+1. authority-relevant runtime/helper modules; and
+2. qualification-contributing test modules.
+
+Runtime imports may resolve only to the runtime/helper manifest. Qualification
+-test imports may resolve to either exact-pinned runtime/helpers or exact-pinned
+qualification tests. Any other candidate-local dependency fails closed. Dynamic
+import/lookup/execution capability is rejected in governed runtime code.
+Passing is evidence only.
 """
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ import ast
 from pathlib import Path
 import subprocess
 import tempfile
-from typing import Iterable
+from typing import Mapping
 
 CANDIDATE_REPO = "https://github.com/vij7661/setugo-ai-development-framework.git"
 CANDIDATE_SHA = "4200397f21e12f900c309ee1bc66fa8424135f11"
@@ -129,40 +132,63 @@ def _imports_and_forbidden_nodes(path: Path) -> tuple[set[str], list[int]]:
     return imported, sorted(forbidden_lines)
 
 
-def _require_local_targets_pinned(runtime: Path, source_label: str, imports: set[str]) -> list[str]:
-    local_targets: list[str] = []
+def _normalize_test_blobs(value: Mapping[str, str] | None) -> dict[str, str]:
+    blobs = dict(value or {})
+    for filename, blob in blobs.items():
+        if not isinstance(filename, str) or not filename.startswith("test_") or not filename.endswith(".py"):
+            raise AssertionError(f"invalid qualification test closure root: {filename!r}")
+        if "/" in filename or "\\" in filename:
+            raise AssertionError(f"qualification test closure root must be top-level: {filename!r}")
+        if not isinstance(blob, str) or len(blob) != 40 or any(ch not in "0123456789abcdef" for ch in blob):
+            raise AssertionError(f"invalid qualification test blob: {filename!r}")
+    return blobs
+
+
+def _require_runtime_targets_pinned(runtime: Path, source_label: str, imports: set[str]) -> list[str]:
+    targets: list[str] = []
     for module in sorted(imports):
         target = _local_module_relpath(runtime, module)
         if target is None:
             continue
         if target not in PINNED_RUNTIME_BLOBS:
             raise AssertionError(
-                "unpinned candidate-local import reachable from governed source: "
+                "unpinned candidate-local import reachable from governed runtime: "
                 f"{source_label} -> {target}"
             )
-        local_targets.append(target)
-    return local_targets
+        targets.append(target)
+    return targets
 
 
-def _normalize_test_roots(qualification_test_files: Iterable[str] | None) -> frozenset[str]:
-    roots = frozenset(qualification_test_files or ())
-    for filename in roots:
-        if not isinstance(filename, str) or not filename.startswith("test_") or not filename.endswith(".py"):
-            raise AssertionError(f"invalid qualification test closure root: {filename!r}")
-        if "/" in filename or "\\" in filename:
-            raise AssertionError(f"qualification test closure root must be top-level: {filename!r}")
-    return roots
+def _require_test_targets_pinned(
+    runtime: Path,
+    source_label: str,
+    imports: set[str],
+    test_blobs: Mapping[str, str],
+) -> list[str]:
+    targets: list[str] = []
+    allowed = set(PINNED_RUNTIME_BLOBS) | set(test_blobs)
+    for module in sorted(imports):
+        target = _local_module_relpath(runtime, module)
+        if target is None:
+            continue
+        if target not in allowed:
+            raise AssertionError(
+                "unpinned candidate-local import reachable from governed qualification test: "
+                f"{source_label} -> {target}"
+            )
+        targets.append(target)
+    return targets
 
 
 def verify_repo(
     repo: Path,
     *,
-    qualification_test_files: Iterable[str] | None = None,
+    qualification_test_blobs: Mapping[str, str] | None = None,
 ) -> dict[str, list[str]]:
     runtime = repo / RUNTIME_DIR
     if not runtime.is_dir():
         raise AssertionError("candidate governance-runtime directory missing")
-    test_roots = _normalize_test_roots(qualification_test_files)
+    test_blobs = _normalize_test_blobs(qualification_test_blobs)
 
     for runtime_relpath, expected_blob in PINNED_RUNTIME_BLOBS.items():
         relpath = f"{RUNTIME_DIR}/{runtime_relpath}"
@@ -170,6 +196,14 @@ def verify_repo(
         if actual != expected_blob:
             raise AssertionError(
                 f"runtime closure blob mismatch: {relpath}: {actual} != {expected_blob}"
+            )
+
+    for test_filename, expected_blob in test_blobs.items():
+        relpath = f"{RUNTIME_DIR}/{test_filename}"
+        actual = _blob_sha(repo, relpath)
+        if actual != expected_blob:
+            raise AssertionError(
+                f"qualification test closure blob mismatch: {relpath}: {actual} != {expected_blob}"
             )
 
     visited: set[str] = set()
@@ -187,7 +221,7 @@ def verify_repo(
                 "dynamic import/lookup/execution capability forbidden in governed runtime closure: "
                 f"{runtime_relpath}:{forbidden_lines}"
             )
-        local_targets = _require_local_targets_pinned(runtime, runtime_relpath, imports)
+        local_targets = _require_runtime_targets_pinned(runtime, runtime_relpath, imports)
         for target in local_targets:
             if target not in visited:
                 queue.append(target)
@@ -197,15 +231,14 @@ def verify_repo(
     if missing:
         raise AssertionError(f"pinned runtime entries were not audited: {sorted(missing)}")
 
-    for test_filename in sorted(test_roots):
+    for test_filename in sorted(test_blobs):
         test_path = runtime / test_filename
-        if not test_path.is_file():
-            raise AssertionError(f"pinned qualification test missing from candidate runtime: {test_filename}")
         imports, _ = _imports_and_forbidden_nodes(test_path)
-        edges[f"TEST:{test_filename}"] = _require_local_targets_pinned(
+        edges[f"TEST:{test_filename}"] = _require_test_targets_pinned(
             runtime,
             f"TEST:{test_filename}",
             imports,
+            test_blobs,
         )
 
     return {name: edges[name] for name in sorted(edges)}
@@ -214,7 +247,7 @@ def verify_repo(
 def verify(
     candidate_sha: str = CANDIDATE_SHA,
     *,
-    qualification_test_files: Iterable[str] | None = None,
+    qualification_test_blobs: Mapping[str, str] | None = None,
 ) -> dict[str, list[str]]:
     if candidate_sha != CANDIDATE_SHA:
         raise AssertionError("runtime closure verifier is not bound to exact RELEASE candidate")
@@ -229,7 +262,7 @@ def verify(
         actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
         if actual != candidate_sha:
             raise AssertionError("runtime closure checkout is not exact candidate SHA")
-        return verify_repo(repo, qualification_test_files=qualification_test_files)
+        return verify_repo(repo, qualification_test_blobs=qualification_test_blobs)
 
 
 if __name__ == "__main__":
