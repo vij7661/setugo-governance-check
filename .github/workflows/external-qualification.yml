@@ -46,7 +46,7 @@ jobs:
         env:
           GOVERNANCE_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          python checker/falsify_candidate_entry.py \
+          python checker/falsify_candidate_r9_entry.py \
             --repo vij7661/setugo-ai-development-framework \
             --sha '${{ inputs.candidate_sha }}' | tee result.json
 
