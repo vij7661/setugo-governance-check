@@ -16,6 +16,7 @@ import verify_release_runtime_import_closure as runtime_closure
 CURRENT_RELEASE_CANDIDATE_SHA = "4200397f21e12f900c309ee1bc66fa8424135f11"
 CURRENT_RELEASE_ROOT_MODULE_BLOB_SHA = "7de7c00519853d5ff0d776d40f94c20c9d5f976d"
 REQUIRED_REVIEW_ADJUDICATION_CHECK = "external-release-review-adjudication"
+CURRENT_QUALIFICATION_TEST_FILES = frozenset(release.r10.QUALIFICATION_TEST_FILES)
 
 release.RELEASE_CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
 release.RELEASE_RUNTIME_BLOBS[
@@ -25,17 +26,20 @@ release.RELEASE_REQUIRED_CHECKS = frozenset(
     set(release.RELEASE_REQUIRED_CHECKS) | {REQUIRED_REVIEW_ADJUDICATION_CHECK}
 )
 runtime_closure.CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
-runtime_closure.QUALIFICATION_TEST_FILES = frozenset(release.r10.QUALIFICATION_TEST_FILES)
-# One exact checker-owned manifest now governs both static closure and runtime
-# observation. Any candidate-local helper imported by a pinned qualification
-# test must also be present in this map.
+# One exact checker-owned manifest governs runtime observation. Qualification
+# test roots are passed explicitly into static closure rather than mutating a
+# module global, so independent test/review invocations cannot contaminate one
+# another.
 release.r10.RUNTIME_PINNED_BLOBS = dict(runtime_closure.PINNED_RUNTIME_BLOBS)
 
 _original_extra_release_paths = release.verify_and_execute_extra_release_paths
 
 
 def _verify_current_extra_release_paths() -> None:
-    graph = runtime_closure.verify(CURRENT_RELEASE_CANDIDATE_SHA)
+    graph = runtime_closure.verify(
+        CURRENT_RELEASE_CANDIDATE_SHA,
+        qualification_test_files=CURRENT_QUALIFICATION_TEST_FILES,
+    )
     if not graph:
         raise AssertionError("RELEASE runtime import closure produced no audited modules")
     _original_extra_release_paths()
