@@ -19,7 +19,7 @@ import tempfile
 import falsify_candidate_r10_entry as r10
 import verify_release_merge_authority as merge_authority
 
-RELEASE_CANDIDATE_SHA = "b0b843356bb3d281e525284d85f79204ba9d4460"
+RELEASE_CANDIDATE_SHA = "82782136fcbff465cddaf7b9832eafd2283fd892"
 CANDIDATE_REPO = "https://github.com/vij7661/setugo-ai-development-framework.git"
 RELEASE_RULESET_ID = 22789078
 RELEASE_RULESET_REF = "refs/heads/phase/release"
@@ -30,7 +30,6 @@ RELEASE_REQUIRED_CHECKS = frozenset({
     "external-release-merge-authority",
 })
 
-# Successor-specific authority-critical pins.
 r10.checker.EXPECTED_MANUAL_AUTHORITY_VERIFIER_BLOB_SHA = "fbcd992d7c3ea1c415bd01e3a0d638865f0f5898"
 r10.checker.EXPECTED_POLICY_FACADE_BLOB_SHA = "998cb2a90b6530132239e1a6274718b605680909"
 
@@ -38,6 +37,7 @@ RELEASE_TEST_BLOBS = {
     "test_qualification_boundary_policy.py": "406bd608be28c440209aea12b060c31822ced1fc",
     "test_qualification_boundary_unittest_bridge.py": "228476966201aba4ce6cc9ea17eda18d5240ce5f",
     "test_release_r1_bridge_shape_guard.py": "73efc664eac408b1d581426d736353ef729c3600",
+    "test_release_r1_action_pinning.py": "179fe80d7401555cd194a189297cb7c6f00488f9",
     "test_release_r3_phase_scoped_authority.py": "2666bf3ad24ecccd0e68e1025b786dfbadd0977e",
 }
 
@@ -47,7 +47,6 @@ RELEASE_RUNTIME_BLOBS = {
     "governance-runtime/release_manual_authority_verifier.py": "6e71413054d599fccfc4a265228a2a681f9d2ed0",
 }
 
-# Every previously exposed qualification-contributing runtime import is pinned.
 QUALIFICATION_RUNTIME_CLOSURE_BLOBS = {
     "governance-runtime/review_protocol.py": "1bf92a5775a780f0f32d166fb6c6a0c522bbf490",
     "governance-runtime/phase_policy.py": "219d406d0335a318d91c8c940b19b8a39ad63a03",
@@ -76,7 +75,11 @@ def _release_assert_equal(actual: object, expected: object, label: str) -> None:
 def _release_run(cmd: list[str], cwd: Path | None = None) -> None:
     if cwd is not None and Path(cwd).name == "governance-runtime":
         explicit = [str(arg) for arg in cmd if str(arg).endswith(".py") and str(arg).startswith("test_")]
-        required = ("test_release_r1_bridge_shape_guard.py", "test_release_r3_phase_scoped_authority.py")
+        required = (
+            "test_release_r1_bridge_shape_guard.py",
+            "test_release_r1_action_pinning.py",
+            "test_release_r3_phase_scoped_authority.py",
+        )
         if explicit:
             cmd = list(cmd)
             for filename in required:
@@ -98,6 +101,24 @@ def _git_blob_sha(repo: Path, relpath: str) -> str:
     if len(parts) < 3:
         raise AssertionError(f"missing pinned RELEASE path: {relpath}")
     return parts[2]
+
+
+def _verify_pinned_blob(repo: Path, relpath: str, expected_blob: str) -> None:
+    actual_blob = _git_blob_sha(repo, relpath)
+    if actual_blob != expected_blob:
+        raise AssertionError(
+            f"RELEASE external execution blob mismatch for {relpath}: "
+            f"{actual_blob} != {expected_blob}"
+        )
+
+
+def _prove_runtime_pin_negative_control(repo: Path) -> None:
+    relpath = "governance-runtime/review_protocol.py"
+    try:
+        _verify_pinned_blob(repo, relpath, "0" * 40)
+    except AssertionError:
+        return
+    raise AssertionError("runtime-closure negative control unexpectedly accepted substituted blob")
 
 
 def _reject_committed_bytecode(repo: Path) -> None:
@@ -287,9 +308,8 @@ def verify_and_execute_extra_release_paths() -> None:
         _reject_committed_bytecode(repo)
         all_pins = {**RELEASE_RUNTIME_BLOBS, **QUALIFICATION_RUNTIME_CLOSURE_BLOBS, **EXTRA_EXECUTION_BLOBS}
         for relpath, expected_blob in all_pins.items():
-            actual_blob = _git_blob_sha(repo, relpath)
-            if actual_blob != expected_blob:
-                raise AssertionError(f"RELEASE external execution blob mismatch for {relpath}: {actual_blob} != {expected_blob}")
+            _verify_pinned_blob(repo, relpath, expected_blob)
+        _prove_runtime_pin_negative_control(repo)
 
         _verify_live_release_root(repo)
         _verify_live_release_ruleset()
