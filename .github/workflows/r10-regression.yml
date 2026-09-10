@@ -22,9 +22,9 @@ jobs:
           - candidate_sha: 2b69938815e1cd57300bc196d5f8dc18870bc378
             expected: failure
             case_id: R10-B
-          - candidate_sha: af162af911639aba8f801c1545270684a961b71a
+          - candidate_sha: bb6c8adc3ba98b2e9b06ba65d10ef36a061b2ceb
             expected: success
-            case_id: R10-CONTROL
+            case_id: R10-MERGED-SUCCESSOR
     steps:
       - name: Checkout external checker
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
