@@ -33,16 +33,42 @@ jobs:
           owner: vij7661
           repositories: setugo-ai-development-framework
 
+      - name: Verify independent RELEASE adjudication prerequisite
+        id: adjudication
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACT='evidence/release-review-adjudication.json'
+          SIGNATURE='evidence/release-review-adjudication.sig.b64'
+          if [[ -f "$ARTIFACT" && -f "$SIGNATURE" ]]; then
+            ARTIFACT_B64="$(base64 -w0 "$ARTIFACT")"
+            SIGNATURE_B64="$(tr -d '\r\n' < "$SIGNATURE")"
+          else
+            ARTIFACT_B64=''
+            SIGNATURE_B64=''
+          fi
+          python checker/verify_release_review_adjudication.py \
+            --artifact-b64 "$ARTIFACT_B64" \
+            --signature-b64 "$SIGNATURE_B64" \
+            | tee release-review-adjudication-result.json
+
       - name: Verify signed RELEASE merge authority if present
         id: authority
         continue-on-error: true
         shell: bash
         env:
           CANDIDATE_SHA: 4200397f21e12f900c309ee1bc66fa8424135f11
+          ADJUDICATION_OUTCOME: ${{ steps.adjudication.outcome }}
         run: |
           set -euo pipefail
           ATTESTATION='evidence/release-r3-merge-authority.attestation.json'
           SIGNATURE='evidence/release-r3-merge-authority.attestation.sig.b64'
+          if [[ "$ADJUDICATION_OUTCOME" == success ]]; then
+            ADJUDICATION_EVIDENCE_REF="$(jq -r '.evidence_ref' release-review-adjudication-result.json)"
+          else
+            ADJUDICATION_EVIDENCE_REF=''
+          fi
           if [[ -f "$ATTESTATION" && -f "$SIGNATURE" ]]; then
             ATTESTATION_B64="$(base64 -w0 "$ATTESTATION")"
             SIGNATURE_B64="$(tr -d '\r\n' < "$SIGNATURE")"
@@ -54,25 +80,27 @@ jobs:
             --candidate "$CANDIDATE_SHA" \
             --attestation-b64 "$ATTESTATION_B64" \
             --signature-b64 "$SIGNATURE_B64" \
+            --adjudication-evidence-ref "$ADJUDICATION_EVIDENCE_REF" \
             | tee release-merge-authority-result.json
 
       - name: Publish dedicated RELEASE merge-authority App check
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          STEP_OUTCOME: ${{ steps.authority.outcome }}
+          ADJUDICATION_OUTCOME: ${{ steps.adjudication.outcome }}
+          AUTHORITY_OUTCOME: ${{ steps.authority.outcome }}
           CANDIDATE_SHA: 4200397f21e12f900c309ee1bc66fa8424135f11
           CHECKER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ "$STEP_OUTCOME" == success ]]; then
+          if [[ "$ADJUDICATION_OUTCOME" == success && "$AUTHORITY_OUTCOME" == success ]]; then
             CONCLUSION=success
-            TITLE='Signed RELEASE merge authority verified'
-            SUMMARY="Checker ${CHECKER_SHA} verified HUMAN_RELEASE_AUTHORITY for exact candidate ${CANDIDATE_SHA} and scope MERGE_RELEASE_CANDIDATE. This check reflects signed authority; it does not mint authority."
+            TITLE='Signed RELEASE merge authority verified against independent adjudication'
+            SUMMARY="Checker ${CHECKER_SHA} verified exact-candidate independent RELEASE PASS adjudication and a HUMAN_RELEASE_AUTHORITY signature bound to that adjudication digest."
           else
             CONCLUSION=failure
-            TITLE='RELEASE merge authority absent or invalid'
-            SUMMARY="Checker ${CHECKER_SHA} did not verify the required signed HUMAN_RELEASE_AUTHORITY attestation for exact candidate ${CANDIDATE_SHA}. Merge remains blocked."
+            TITLE='RELEASE merge prerequisites absent or invalid'
+            SUMMARY="Checker ${CHECKER_SHA} did not verify both independent RELEASE adjudication and digest-bound HUMAN_RELEASE_AUTHORITY for exact candidate ${CANDIDATE_SHA}. Merge remains blocked."
           fi
           jq -n \
             --arg name 'external-release-merge-authority' \
@@ -93,4 +121,4 @@ jobs:
           test "$(jq -r '.external_id' published-check.json)" = "$CHECKER_SHA"
           test "$(jq -r '.app.id' published-check.json)" = '4895420'
           test "$(jq -r '.name' published-check.json)" = 'external-release-merge-authority'
-          printf 'authority_step_outcome=%s\n' "$STEP_OUTCOME"
+          printf 'adjudication=%s authority=%s\n' "$ADJUDICATION_OUTCOME" "$AUTHORITY_OUTCOME"
