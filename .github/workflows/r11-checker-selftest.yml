@@ -28,6 +28,10 @@ jobs:
       - name: Run R11 checker-owned harness falsification tests
         run: python -m unittest -v checker/test_r11_harness.py
 
-      - name: Run exact-current RELEASE binding selftests
+      - name: Run exact-current RELEASE binding and runtime-closure selftests
         working-directory: checker
-        run: python -m unittest -v test_release_current_binding.py
+        run: |
+          set -euo pipefail
+          python -m unittest -v \
+            test_release_current_binding.py \
+            test_release_runtime_import_closure.py
