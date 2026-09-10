@@ -1,0 +1,83 @@
+name: External Governance Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full 40-character candidate SHA from setugo-ai-development-framework
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout external checker
+        uses: actions/checkout@v4
+
+      - name: Validate candidate SHA format
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA='${{ inputs.candidate_sha }}'
+          [[ "$SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+
+      - name: Run external falsifier
+        id: falsify
+        continue-on-error: true
+        shell: bash
+        run: |
+          python checker/falsify_candidate.py \
+            --repo vij7661/setugo-ai-development-framework \
+            --sha '${{ inputs.candidate_sha }}' | tee result.json
+
+      - name: Create GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.SETUGO_GOVERNANCE_APP_ID }}
+          private-key: ${{ secrets.SETUGO_GOVERNANCE_APP_PRIVATE_KEY }}
+          owner: vij7661
+          repositories: setugo-ai-development-framework
+
+      - name: Publish external qualification check
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SHA: ${{ inputs.candidate_sha }}
+          STEP_OUTCOME: ${{ steps.falsify.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$STEP_OUTCOME" == "success" ]]; then
+            CONCLUSION=success
+            TITLE='External governance falsification passed (evidence only)'
+            SUMMARY='External checker completed its frozen TESTING qualification attacks. This is evidence only and grants no terminal authority.'
+          else
+            CONCLUSION=failure
+            TITLE='External governance falsification failed closed'
+            SUMMARY='At least one external qualification invariant failed. TESTING remains blocked. This check grants no terminal authority.'
+          fi
+
+          jq -n \
+            --arg name 'external-governance-qualification' \
+            --arg head_sha "$SHA" \
+            --arg conclusion "$CONCLUSION" \
+            --arg title "$TITLE" \
+            --arg summary "$SUMMARY" \
+            '{name:$name, head_sha:$head_sha, status:"completed", conclusion:$conclusion, output:{title:$title, summary:$summary}}' \
+            > check.json
+
+          curl --fail-with-body -sS \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/vij7661/setugo-ai-development-framework/check-runs \
+            -d @check.json
+
+      - name: Fail workflow when falsification failed
+        if: steps.falsify.outcome != 'success'
+        run: exit 1
