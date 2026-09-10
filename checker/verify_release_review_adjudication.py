@@ -2,13 +2,9 @@
 """Checker-owned verifier for exact-SHA independent RELEASE adjudication.
 
 A verified adjudication is evidence only. It does not grant RELEASE terminal
-authority. The adjudication must be signed by the independent governance
-adjudicator trust root and must itself bind the raw review bytes, candidate,
-frozen qualification checker, PR, policy, and PASS disposition.
-
-`reviewed_checker_sha` intentionally identifies the checker revision whose
-qualification evidence is being adjudicated. It is not the self-SHA of this
-verifier, which may evolve through protected successor commits.
+authority. The adjudication must be signed by the independent review-adjudicator
+trust root and must itself bind the raw review bytes, candidate, frozen
+qualification checker, PR, policy, and PASS disposition.
 """
 from __future__ import annotations
 
@@ -32,17 +28,16 @@ POLICY_ID = "QUALIFICATION_BOUNDARY_OWNERSHIP"
 POLICY_VERSION = 7
 POLICY_HASH = "3a1936d3e8956b2521908189139ee73868c48f29be13fcacea84f839ca6b2258"
 
-TRUST_ROOT_ID = "SETUGO_MANUAL_GOVERNANCE_ED25519_V1"
+TRUST_ROOT_ID = "SETUGO_REVIEW_ADJUDICATION_ED25519_V2"
 ROOT_REPO = "vij7661/setugo-governance-root"
 ROOT_REPO_ID = 1363676838
-ROOT_COMMIT = "5f470774ec8c17f5519da8db2aaae59af114cef9"
+ROOT_COMMIT = "243c93a453eac0a1b0bc7f41061dfa99ab42e74b"
 ROOT_METADATA_PATH = f"trust-roots/{TRUST_ROOT_ID}.json"
 ROOT_PEM_PATH = f"trust-roots/{TRUST_ROOT_ID}.pem"
-ROOT_METADATA_BLOB = "882178e631b98903de872c04aaa23c67b80a75ed"
+ROOT_METADATA_BLOB = "f39c5262bfc80f2cd65f6d2c3fe164f764e1e98c"
 ROOT_DER_SHA256 = "2b1b97ab0bf99e71f4a93f51fd8e6c3eb30063d83ba2eb4c091492a95f9c11f2"
 
 RAW_REVIEW_REPO = "vij7661/setugo-governance-check"
-RAW_REVIEW_PATH_PREFIX = "evidence/manual-reviews/"
 RAW_REVIEW_REF_RE = re.compile(
     r"^https://raw\.githubusercontent\.com/vij7661/setugo-governance-check/"
     r"(?P<commit>[0-9a-f]{40})/evidence/manual-reviews/"
@@ -65,6 +60,20 @@ REQUIRED_FIELDS = frozenset({
     "qualification_policy_hash", "trust_root_id",
 })
 
+ROOT_EXPECTED_METADATA = {
+    "schema_version": 2,
+    "trust_root_id": TRUST_ROOT_ID,
+    "algorithm": "Ed25519",
+    "public_key_path": ROOT_PEM_PATH,
+    "public_key_der_sha256": ROOT_DER_SHA256,
+    "authority_scope": "CROSS_PHASE_REVIEW_ADJUDICATION_EVIDENCE_VERIFICATION_ONLY",
+    "permitted_authority_class": AUTHORITY_CLASS,
+    "permitted_decision_scopes": [DECISION_SCOPE],
+    "permitted_candidate_phases": ["TESTING", "RELEASE", "PRODUCTION"],
+    "private_key_location": "EXTERNAL_OFF_REPOSITORY_USER_CONTROLLED",
+    "private_key_must_never_be_committed": True,
+    "authority_effect": "NONE_EVIDENCE_ONLY",
+}
 
 class ReleaseReviewError(RuntimeError):
     pass
@@ -99,6 +108,12 @@ def _fetch_bytes(url: str) -> bytes:
         raise ReleaseReviewError(f"unable to fetch adjudication byte evidence: {type(exc).__name__}") from exc
 
 
+def validate_root_metadata(metadata: Mapping[str, Any]) -> None:
+    for key, value in ROOT_EXPECTED_METADATA.items():
+        if metadata.get(key) != value:
+            raise ReleaseReviewError(f"adjudicator root metadata mismatch: {key}")
+
+
 def _root_public_key() -> bytes:
     repo = _fetch_json(f"https://api.github.com/repos/{ROOT_REPO}")
     if repo.get("id") != ROOT_REPO_ID or repo.get("full_name") != ROOT_REPO:
@@ -110,22 +125,9 @@ def _root_public_key() -> bytes:
         raise ReleaseReviewError("adjudicator root metadata blob mismatch")
     base = f"https://raw.githubusercontent.com/{ROOT_REPO}/{ROOT_COMMIT}"
     metadata = json.loads(_fetch_bytes(f"{base}/{ROOT_METADATA_PATH}").decode("utf-8"))
-    expected = {
-        "schema_version": 1,
-        "trust_root_id": TRUST_ROOT_ID,
-        "algorithm": "Ed25519",
-        "public_key_path": ROOT_PEM_PATH,
-        "public_key_der_sha256": ROOT_DER_SHA256,
-        "authority_scope": "TESTING_MANUAL_GOVERNANCE_ATTESTATION_VERIFICATION_ONLY",
-        "private_key_location": "EXTERNAL_OFF_REPOSITORY_USER_CONTROLLED",
-        "private_key_must_never_be_committed": True,
-        "authority_effect": "NONE_BY_ITSELF",
-    }
     if not isinstance(metadata, Mapping):
         raise ReleaseReviewError("adjudicator root metadata is not an object")
-    for key, value in expected.items():
-        if metadata.get(key) != value:
-            raise ReleaseReviewError(f"adjudicator root metadata mismatch: {key}")
+    validate_root_metadata(metadata)
     pem = _fetch_bytes(f"{base}/{ROOT_PEM_PATH}")
     with tempfile.TemporaryDirectory(prefix="setugo-review-root-") as td:
         root = Path(td); pem_path = root / "root.pem"; der_path = root / "root.der"
@@ -202,7 +204,7 @@ def verify_signature(artifact: Mapping[str, Any], signature_b64: str, public_key
     if len(signature) != 64:
         raise ReleaseReviewError("independent adjudication signature length is invalid")
     with tempfile.TemporaryDirectory(prefix="setugo-review-adjudication-") as td:
-        root = Path(td); key = root/"public.pem"; payload=root/"artifact.json"; sig=root/"artifact.sig"
+        root = Path(td); key = root / "public.pem"; payload = root / "artifact.json"; sig = root / "artifact.sig"
         key.write_bytes(public_key); payload.write_bytes(canonical_bytes(artifact)); sig.write_bytes(signature)
         result = subprocess.run(["openssl","pkeyutl","-verify","-pubin","-inkey",str(key),"-rawin","-in",str(payload),"-sigfile",str(sig)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if result.returncode != 0:
@@ -228,9 +230,8 @@ def main() -> int:
         print(json.dumps({"result":"REJECTED","candidate_sha":CANDIDATE_SHA,"authority_effect":"NONE","reason":str(exc)}, sort_keys=True))
         return 1
     digest = adjudication_digest(artifact)
-    print(json.dumps({"result":"VERIFIED","candidate_sha":CANDIDATE_SHA,"disposition":artifact["disposition"],"adjudication_digest":digest,"evidence_ref":"sha256:"+digest,"authority_effect":"NONE_EVIDENCE_ONLY"}, sort_keys=True))
+    print(json.dumps({"result":"VERIFIED","candidate_sha":CANDIDATE_SHA,"disposition":artifact["disposition"],"adjudication_digest":digest,"evidence_ref":"sha256:" + digest,"authority_effect":"NONE_EVIDENCE_ONLY"}, sort_keys=True))
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

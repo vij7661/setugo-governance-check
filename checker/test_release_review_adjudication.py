@@ -35,6 +35,30 @@ class ReleaseReviewAdjudicationTests(unittest.TestCase):
         gate.validate_artifact(self._valid())
         self.assertEqual(64, len(gate.adjudication_digest(self._valid())))
 
+    def test_v2_root_contract_is_cross_phase_review_only(self):
+        gate.validate_root_metadata(dict(gate.ROOT_EXPECTED_METADATA))
+        self.assertEqual("SETUGO_REVIEW_ADJUDICATION_ED25519_V2", gate.TRUST_ROOT_ID)
+        self.assertEqual("CROSS_PHASE_REVIEW_ADJUDICATION_EVIDENCE_VERIFICATION_ONLY", gate.ROOT_EXPECTED_METADATA["authority_scope"])
+        self.assertEqual(gate.AUTHORITY_CLASS, gate.ROOT_EXPECTED_METADATA["permitted_authority_class"])
+        self.assertEqual([gate.DECISION_SCOPE], gate.ROOT_EXPECTED_METADATA["permitted_decision_scopes"])
+        self.assertIn("RELEASE", gate.ROOT_EXPECTED_METADATA["permitted_candidate_phases"])
+        self.assertEqual("NONE_EVIDENCE_ONLY", gate.ROOT_EXPECTED_METADATA["authority_effect"])
+
+    def test_v2_root_scope_class_decision_and_phase_rebinding_fail_closed(self):
+        mutations = {
+            "authority_scope": "TESTING_MANUAL_GOVERNANCE_ATTESTATION_VERIFICATION_ONLY",
+            "permitted_authority_class": "HUMAN_RELEASE_AUTHORITY",
+            "permitted_decision_scopes": ["TERMINAL_ACTION:RELEASE:MERGE_RELEASE_CANDIDATE"],
+            "permitted_candidate_phases": ["TESTING"],
+            "authority_effect": "MERGE_RELEASE_CANDIDATE_ONLY",
+        }
+        for field, replacement in mutations.items():
+            with self.subTest(field=field):
+                metadata = dict(gate.ROOT_EXPECTED_METADATA)
+                metadata[field] = replacement
+                with self.assertRaisesRegex(gate.ReleaseReviewError, f"metadata mismatch: {field}"):
+                    gate.validate_root_metadata(metadata)
+
     def test_non_pass_dispositions_are_not_authority_eligible(self):
         for disposition in ("BOUNDED_PASS", "CHANGES_REQUIRED", "INSUFFICIENT_EVIDENCE"):
             with self.subTest(disposition=disposition):
@@ -49,7 +73,7 @@ class ReleaseReviewAdjudicationTests(unittest.TestCase):
             "qualification_policy_hash": "2" * 64,
             "authority_class": "HUMAN_RELEASE_AUTHORITY",
             "decision_scope": "TERMINAL_ACTION:RELEASE:MERGE_RELEASE_CANDIDATE",
-            "trust_root_id": "SETUGO_RELEASE_GOVERNANCE_ED25519_V1",
+            "trust_root_id": "SETUGO_MANUAL_GOVERNANCE_ED25519_V1",
         }
         for field, replacement in mutations.items():
             with self.subTest(field=field):
