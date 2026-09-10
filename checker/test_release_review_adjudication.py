@@ -21,7 +21,7 @@ class ReleaseReviewAdjudicationTests(unittest.TestCase):
             "source_kind": gate.SOURCE_KIND,
             "raw_review_ref": "manual-review:example",
             "raw_review_sha256": "a" * 64,
-            "reviewed_checker_sha": gate.CHECKER_SHA,
+            "reviewed_checker_sha": gate.QUALIFICATION_CHECKER_SHA,
             "qualification_policy_id": gate.POLICY_ID,
             "qualification_policy_version": gate.POLICY_VERSION,
             "qualification_policy_hash": gate.POLICY_HASH,
@@ -53,6 +53,12 @@ class ReleaseReviewAdjudicationTests(unittest.TestCase):
                 value = self._valid(); value[field] = replacement
                 with self.assertRaisesRegex(gate.ReleaseReviewError, f"mismatch: {field}"):
                     gate.validate_artifact(value)
+
+    def test_pre_f08_checker_cannot_be_claimed_as_reviewed_qualification_checker(self):
+        value = self._valid()
+        value["reviewed_checker_sha"] = "4757ceb036c95739aa695d035fc97df63148a691"
+        with self.assertRaisesRegex(gate.ReleaseReviewError, "mismatch: reviewed_checker_sha"):
+            gate.validate_artifact(value)
 
     def test_raw_review_reference_and_digest_are_mandatory(self):
         value = self._valid(); value["raw_review_ref"] = ""
