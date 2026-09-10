@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,8 +29,6 @@ EXTRA_EXECUTION_BLOBS = {
     "experiments/governed-platform/governance/test_integrated_governed_mvp_slice6_terminal_authority.py": "970b28aed4952d90081e89e781c5711bf26c4f68",
 }
 
-# Replace the bridge pin and add the RELEASE-specific regression to the
-# externally governed test closure before checker execution.
 r10.r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update(RELEASE_TEST_BLOBS)
 r10.QUALIFICATION_TEST_FILES = frozenset(r10.r9.EXPECTED_QUALIFICATION_TEST_BLOBS)
 
@@ -39,9 +36,6 @@ _original_run = r10.checker.run
 
 
 def _release_run(cmd: list[str], cwd: Path | None = None) -> None:
-    # The base checker invokes its qualification corpus once. Add the pinned
-    # RELEASE shape guard to that exact explicit corpus rather than relying on
-    # discovery or candidate plugins.
     if cwd is not None and Path(cwd).name == "governance-runtime":
         explicit = [str(arg) for arg in cmd if str(arg).endswith(".py") and str(arg).startswith("test_")]
         if explicit and "test_release_r1_bridge_shape_guard.py" not in explicit:
@@ -67,6 +61,61 @@ def _git_blob_sha(repo: Path, relpath: str) -> str:
     return parts[2]
 
 
+def _reject_stdlib_collisions(directory: Path) -> None:
+    stdlib = frozenset(getattr(sys, "stdlib_module_names", ()))
+    if not stdlib:
+        raise AssertionError("stdlib namespace inventory unavailable")
+    for entry in directory.iterdir():
+        if entry.name == "__pycache__":
+            continue
+        if entry.is_dir():
+            module_name = entry.name
+        elif entry.name.endswith(".py"):
+            module_name = entry.name[:-3]
+        elif entry.name.endswith((".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib")):
+            module_name = entry.name.split(".", 1)[0]
+        else:
+            continue
+        if module_name in stdlib:
+            raise AssertionError(f"candidate stdlib namespace collision in external execution directory: {entry}")
+
+
+def _run_file_with_sibling_imports(path: Path, *, env: dict[str, str]) -> None:
+    directory = path.parent.resolve()
+    _reject_stdlib_collisions(directory)
+    bootstrap = (
+        "import runpy,sys; "
+        "d=sys.argv[1]; p=sys.argv[2]; "
+        "sys.path.insert(0,d); "
+        "runpy.run_path(p,run_name='__main__')"
+    )
+    subprocess.run(
+        [sys.executable, "-I", "-c", bootstrap, str(directory), str(path.resolve())],
+        cwd=r10.checker.CHECKER_ROOT,
+        env=env,
+        check=True,
+    )
+
+
+def _run_unittest_module_isolated(directory: Path, module_name: str, *, env: dict[str, str]) -> None:
+    directory = directory.resolve()
+    _reject_stdlib_collisions(directory)
+    bootstrap = (
+        "import sys,unittest; "
+        "d=sys.argv[1]; m=sys.argv[2]; "
+        "sys.path.insert(0,d); "
+        "suite=unittest.defaultTestLoader.loadTestsFromName(m); "
+        "r=unittest.TextTestRunner(verbosity=2).run(suite); "
+        "raise SystemExit(0 if r.wasSuccessful() and suite.countTestCases()>0 else 1)"
+    )
+    subprocess.run(
+        [sys.executable, "-I", "-c", bootstrap, str(directory), module_name],
+        cwd=r10.checker.CHECKER_ROOT,
+        env=env,
+        check=True,
+    )
+
+
 def verify_and_execute_extra_release_paths() -> None:
     with tempfile.TemporaryDirectory(prefix="setugo-release-r1-") as td:
         repo = Path(td) / "candidate"
@@ -86,17 +135,14 @@ def verify_and_execute_extra_release_paths() -> None:
 
         env = os.environ.copy()
         env["PYTHONNOUSERSITE"] = "1"
-        subprocess.run(
-            [sys.executable, "-I", str(repo / "governance-runtime/verify_external_trust_root_control.py")],
-            cwd=repo,
+        _run_file_with_sibling_imports(
+            repo / "governance-runtime/verify_external_trust_root_control.py",
             env=env,
-            check=True,
         )
-        subprocess.run(
-            [sys.executable, "-I", "-m", "unittest", "-v", "test_integrated_governed_mvp_slice6_terminal_authority.py"],
-            cwd=repo / "experiments/governed-platform/governance",
+        _run_unittest_module_isolated(
+            repo / "experiments/governed-platform/governance",
+            "test_integrated_governed_mvp_slice6_terminal_authority",
             env=env,
-            check=True,
         )
 
 
