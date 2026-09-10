@@ -1,0 +1,50 @@
+RELEASE R3 — FULL INDEPENDENT FALSIFICATION REVIEW
+
+POSTURE
+Treat the exact candidate as false-green until evidence demonstrates otherwise. Do not infer authority from green CI, GitHub App checks, signatures, repository ownership, previous reviewer/model statements, or this packet. Missing or contradictory material evidence is blocking.
+
+EXACT OBJECTS
+Candidate repo: vij7661/setugo-ai-development-framework
+Candidate PR: #37 release/r1-hardening -> phase/release
+Candidate SHA: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+Qualified TESTING source SHA: 15d50cc25ae524fc64e2c65269c91135e0361846
+Current phase/release base SHA: a5726dcb9236e31028ec70603bee35b30b9dbe66
+External checker repo: vij7661/setugo-governance-check
+Authoritative checker main SHA: 88d8b972b6bed43ceb572471b56b165db6893f06
+RELEASE ruleset ID: 22789078
+Required GitHub App ID: 4895420 (setugo-governance-vij7661)
+RELEASE trust root: SETUGO_RELEASE_GOVERNANCE_ED25519_V1
+Root repo exact commit: vij7661/setugo-release-governance-root@7300b9b0d27611bcb5ccc1638fb1d16e53dc5994
+DER SHA256 pin: 91355cf1049a27aac52ea56f5ba1664054aded93500203cd23d557a710b0444c
+
+CURRENT EXPECTED CHECK POLARITY
+external-release-entry-qualification = SUCCESS
+external-release-qualification = SUCCESS
+external-release-merge-authority = FAILURE until separately signed HUMAN_RELEASE_AUTHORITY exists.
+The FAILURE is intentional and must remain fail-closed. A reviewer PASS does not mint authority.
+
+HISTORY
+A prior RELEASE review returned INSUFFICIENT_EVIDENCE. Do not erase or reinterpret it. R2 then preregistered evidence closure for exact-SHA checks, live App-bound ruleset state, immutable ancestry + negative vectors, checker provenance, harness/import isolation, qualification-contributing dependency/test/helper/fixture/workflow/runtime closure, mutable workflows/dependencies, bypass controls, authority separation, RELEASE-vs-PRODUCTION mapping, and independently verifiable RED chronology.
+
+REVIEW THESE DIMENSIONS
+1. Exact-SHA and TESTING->RELEASE ancestry binding.
+2. External checker independence/provenance and whether candidate-controlled code can self-satisfy protected checks.
+3. Live phase/release ruleset target, strictness, PR/force/delete/bypass controls and App integration binding.
+4. Complete qualification-contributing source/test/helper/fixture/workflow/runtime closure.
+5. Adversarial harness/import/path isolation and command interception.
+6. Async/generator/async-generator/returned-awaitable false-green closure.
+7. Mutable actions/dependencies and artifact reproducibility.
+8. RELEASE-scoped Ed25519 trust-root separation, authority-class/scope and signature-verifier correctness.
+9. Policy ID/version/hash binding, stale-policy/stale-SHA/substitution/replay paths.
+10. Review-finding adjudication and terminal authority separation.
+11. RELEASE-vs-PRODUCTION boundary; release evidence must not grant production qualification/deployment authority.
+12. RELEASE-material configuration, migration/recovery, security, reproducibility and performance/resource concerns actually supported by this repository.
+13. Preservation of historical RED evidence and whether later greens can erase/bypass it.
+
+REQUIRED OUTPUT
+Return exactly one overall disposition: RELEASE_RULES_BOUNDED_PASS, CHANGES_REQUIRED, or INSUFFICIENT_EVIDENCE.
+For every finding provide: ID; severity Critical/High/Medium/Low; RELEASE materiality; exact packet evidence/reference; concrete false-green/governance path; whether it blocks PR #37; and minimum falsification/repair needed.
+Explicitly state whether exact candidate 6d4fbb9ce266979ca3147a159ae724f33e0362ba may proceed to separate HUMAN_RELEASE_AUTHORITY consideration for TERMINAL_ACTION:RELEASE:MERGE_RELEASE_CANDIDATE. Do not grant that authority yourself. Separately identify production-only concerns that may legitimately defer.
+
+NON-CLAIMS
+phase/release has not been updated to this candidate. PR #37 is not authorized to merge. The merge-authority App check is intentionally failing. No production qualification/deploy authority is claimed. Packet-generation tooling is non-authoritative.
