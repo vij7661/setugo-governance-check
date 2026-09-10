@@ -38,7 +38,7 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          CANDIDATE_SHA: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+          CANDIDATE_SHA: b0b843356bb3d281e525284d85f79204ba9d4460
         run: |
           set -euo pipefail
           ATTESTATION='evidence/release-r3-merge-authority.attestation.json'
@@ -61,7 +61,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           STEP_OUTCOME: ${{ steps.authority.outcome }}
-          CANDIDATE_SHA: 6d4fbb9ce266979ca3147a159ae724f33e0362ba
+          CANDIDATE_SHA: b0b843356bb3d281e525284d85f79204ba9d4460
           CHECKER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
