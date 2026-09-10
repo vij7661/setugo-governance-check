@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """External falsifier for the Setugo TESTING qualification boundary.
 
-The candidate repository is untrusted input. This checker intentionally keeps its
-qualification floor outside that repository. Passing is evidence only.
+The candidate repository is untrusted input. This checker keeps its qualification
+floor outside that repository. Passing is evidence only and grants no authority.
 """
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import importlib.util
 import json
@@ -22,8 +21,20 @@ EXPECTED_EXTERNAL_ROOT_REPOSITORY = "vij7661/setugo-governance-root"
 EXPECTED_EXTERNAL_ROOT_REPOSITORY_ID = 1363676838
 EXPECTED_EXTERNAL_ROOT_COMMIT = "5f470774ec8c17f5519da8db2aaae59af114cef9"
 EXPECTED_EXTERNAL_ROOT_DER_SHA256 = "2b1b97ab0bf99e71f4a93f51fd8e6c3eb30063d83ba2eb4c091492a95f9c11f2"
+
+# Authority-critical candidate dependency closure for policy v6.
 EXPECTED_POLICY_BLOB_SHA = "019b89f32deba5a7bc93274ff41ad7e61a1aaad3"
 EXPECTED_EXTERNAL_ROOT_MODULE_BLOB_SHA = "c83b4aa9f1253f2cbd5a26b6857af8ded8bbc808"
+EXPECTED_MANUAL_AUTHORITY_VERIFIER_BLOB_SHA = "5d955a9cb74b97853d15bcf64662e2774ad71693"
+EXPECTED_POLICY_FACADE_BLOB_SHA = "8aac9f913df76f3d8d7760ab2989610a47da14bf"
+
+EXPECTED_RULESET_ID = 22736961
+EXPECTED_RULESET_NAME = "phase/testing"
+EXPECTED_RULESET_TARGET_REF = "refs/heads/phase/testing"
+EXPECTED_EXTERNAL_CHECK_CONTEXT = "external-governance-qualification"
+EXPECTED_EXTERNAL_CHECK_APP_ID = 4895420
+EXPECTED_GITHUB_ACTIONS_APP_ID = 15368
+
 EXPECTED_RULE_PHASES = {
     "TESTING_ACCEPTANCE_BOUNDARY": "TESTING",
     "TESTING_ROOT_CAUSE_CLASSIFICATION": "TESTING",
@@ -42,8 +53,55 @@ def output(cmd: list[str], cwd: Path | None = None) -> str:
     return subprocess.check_output(cmd, cwd=cwd, text=True).strip()
 
 
-def load_module(path: Path):
-    spec = importlib.util.spec_from_file_location("candidate_policy", path)
+def assert_equal(actual, expected, label: str) -> None:
+    if actual != expected:
+        raise AssertionError(f"{label} mismatch: {actual!r} != {expected!r}")
+
+
+def github_json(url: str) -> dict[str, object]:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "setugo-governance-check"},
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        value = json.load(response)
+    if not isinstance(value, dict):
+        raise AssertionError(f"GitHub response is not an object: {url}")
+    return value
+
+
+def github_repo_metadata(repo: str) -> dict[str, object]:
+    return github_json(f"https://api.github.com/repos/{repo}")
+
+
+def git_blob_sha(path: Path) -> str:
+    return output(["git", "hash-object", str(path)])
+
+
+def load_runtime_facade(path: Path):
+    # Exercise the same compatibility import surface used by candidate consumers.
+    for name in (
+        "qualification_boundary_policy",
+        "qualification_boundary_policy_v4",
+        "manual_authority_verifier",
+        "external_governance_root",
+    ):
+        sys.modules.pop(name, None)
+    spec = importlib.util.spec_from_file_location("qualification_boundary_policy", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["qualification_boundary_policy"] = module
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+def load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
@@ -55,26 +113,7 @@ def load_module(path: Path):
     return module
 
 
-def assert_equal(actual, expected, label: str) -> None:
-    if actual != expected:
-        raise AssertionError(f"{label} mismatch: {actual!r} != {expected!r}")
-
-
-def github_repo_metadata(repo: str) -> dict[str, object]:
-    request = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}",
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "setugo-governance-check"},
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.load(response)
-
-
-def git_blob_sha(path: Path) -> str:
-    return output(["git", "hash-object", str(path)])
-
-
 def verify_live_external_root(work: Path) -> None:
-    # R7-04: lifecycle/identity is checked by the external enforcement point itself.
     metadata = github_repo_metadata(EXPECTED_EXTERNAL_ROOT_REPOSITORY)
     assert_equal(metadata.get("full_name"), EXPECTED_EXTERNAL_ROOT_REPOSITORY, "live root repository name")
     assert_equal(metadata.get("id"), EXPECTED_EXTERNAL_ROOT_REPOSITORY_ID, "live root repository id")
@@ -102,6 +141,86 @@ def verify_live_external_root(work: Path) -> None:
     assert_equal(root_meta.get("private_key_must_never_be_committed"), True, "external root private-key prohibition")
 
 
+def verify_live_candidate_ruleset() -> None:
+    # R8-02/R8-07: branch-governance evidence is checked outside the candidate tree.
+    ruleset = github_json(
+        f"https://api.github.com/repos/{TARGET_REPOSITORY}/rulesets/{EXPECTED_RULESET_ID}"
+    )
+    assert_equal(ruleset.get("id"), EXPECTED_RULESET_ID, "ruleset id")
+    assert_equal(ruleset.get("name"), EXPECTED_RULESET_NAME, "ruleset name")
+    assert_equal(ruleset.get("target"), "branch", "ruleset target kind")
+    assert_equal(ruleset.get("enforcement"), "active", "ruleset enforcement")
+    assert_equal(ruleset.get("bypass_actors"), [], "ruleset bypass actors")
+    if ruleset.get("current_user_can_bypass") not in ("never", False):
+        raise AssertionError("ruleset does not prove non-bypassable state")
+
+    conditions = ruleset.get("conditions")
+    if not isinstance(conditions, dict):
+        raise AssertionError("ruleset conditions missing")
+    ref_name = conditions.get("ref_name")
+    if not isinstance(ref_name, dict):
+        raise AssertionError("ruleset ref condition missing")
+    includes = ref_name.get("include")
+    if not isinstance(includes, list) or EXPECTED_RULESET_TARGET_REF not in includes:
+        raise AssertionError("ruleset does not target phase/testing")
+
+    rules = ruleset.get("rules")
+    if not isinstance(rules, list):
+        raise AssertionError("ruleset rules missing")
+    by_type = {r.get("type"): r for r in rules if isinstance(r, dict)}
+    for required_type in ("deletion", "non_fast_forward", "pull_request", "required_status_checks"):
+        if required_type not in by_type:
+            raise AssertionError(f"ruleset missing {required_type}")
+
+    pr_params = by_type["pull_request"].get("parameters")
+    if not isinstance(pr_params, dict) or pr_params.get("required_review_thread_resolution") is not True:
+        raise AssertionError("ruleset review-thread resolution is not required")
+
+    status_params = by_type["required_status_checks"].get("parameters")
+    if not isinstance(status_params, dict):
+        raise AssertionError("required-status-check parameters missing")
+    assert_equal(status_params.get("strict_required_status_checks_policy"), True, "strict required checks")
+    checks = status_params.get("required_status_checks")
+    if not isinstance(checks, list):
+        raise AssertionError("required status checks missing")
+    external = [
+        item for item in checks
+        if isinstance(item, dict) and item.get("context") == EXPECTED_EXTERNAL_CHECK_CONTEXT
+    ]
+    assert_equal(
+        external,
+        [{"context": EXPECTED_EXTERNAL_CHECK_CONTEXT, "integration_id": EXPECTED_EXTERNAL_CHECK_APP_ID}],
+        "dedicated external App source binding",
+    )
+    # Candidate GitHub Actions may remain as construction evidence, but it is not the external authority source.
+    if any(item.get("context") == EXPECTED_EXTERNAL_CHECK_CONTEXT and item.get("integration_id") == EXPECTED_GITHUB_ACTIONS_APP_ID
+           for item in checks if isinstance(item, dict)):
+        raise AssertionError("external governance context is incorrectly source-bound to GitHub Actions")
+
+
+def verify_authority_critical_dependency_closure(root: Path) -> tuple[Path, Path]:
+    runtime = root / "governance-runtime"
+    paths = {
+        "policy": runtime / "qualification_boundary_policy_v4.py",
+        "external_root": runtime / "external_governance_root.py",
+        "verifier": runtime / "manual_authority_verifier.py",
+        "facade": runtime / "qualification_boundary_policy.py",
+    }
+    for label, path in paths.items():
+        if not path.is_file():
+            raise AssertionError(f"authority-critical runtime file missing: {label}")
+
+    expected = {
+        "policy": EXPECTED_POLICY_BLOB_SHA,
+        "external_root": EXPECTED_EXTERNAL_ROOT_MODULE_BLOB_SHA,
+        "verifier": EXPECTED_MANUAL_AUTHORITY_VERIFIER_BLOB_SHA,
+        "facade": EXPECTED_POLICY_FACADE_BLOB_SHA,
+    }
+    for label, expected_sha in expected.items():
+        assert_equal(git_blob_sha(paths[label]), expected_sha, f"externally pinned {label} blob")
+    return paths["facade"], paths["external_root"]
+
+
 def falsify(repo: str, sha: str) -> dict[str, object]:
     if repo != TARGET_REPOSITORY:
         raise AssertionError("unexpected candidate repository")
@@ -111,29 +230,19 @@ def falsify(repo: str, sha: str) -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="setugo-governance-check-") as td:
         work = Path(td)
         verify_live_external_root(work)
+        verify_live_candidate_ruleset()
 
         root = work / "candidate"
         run(["git", "clone", "--no-checkout", f"https://github.com/{repo}.git", str(root)])
         run(["git", "fetch", "--depth=1", "origin", sha], cwd=root)
         run(["git", "checkout", "--detach", sha], cwd=root)
-        actual_sha = output(["git", "rev-parse", "HEAD"], cwd=root)
-        assert_equal(actual_sha, sha, "checked-out candidate SHA")
+        assert_equal(output(["git", "rev-parse", "HEAD"], cwd=root), sha, "checked-out candidate SHA")
 
-        policy_path = root / "governance-runtime" / "qualification_boundary_policy_v4.py"
-        ext_path = root / "governance-runtime" / "external_governance_root.py"
-        if not policy_path.is_file() or not ext_path.is_file():
-            raise AssertionError("qualification policy or external-root module missing")
-
-        # R7-05: the whole active policy implementation is externally pinned. A candidate
-        # cannot silently change policy code and make its locally recomputed hash authoritative.
-        assert_equal(git_blob_sha(policy_path), EXPECTED_POLICY_BLOB_SHA, "externally pinned qualification policy blob")
-        # R7-02: the candidate mirror of root resolution is externally pinned too.
-        assert_equal(git_blob_sha(ext_path), EXPECTED_EXTERNAL_ROOT_MODULE_BLOB_SHA, "externally pinned external-root module blob")
-
-        policy = load_module(policy_path)
+        facade_path, ext_path = verify_authority_critical_dependency_closure(root)
+        policy = load_runtime_facade(facade_path)
         assert_equal(policy.POLICY_VERSION, 6, "externally pinned qualification policy version")
 
-        # R7-01: naked caller-controlled role/provenance/current booleans must never grant authority.
+        # R7-01/R8-01: naked caller-controlled labels/booleans cannot authorize.
         allowed, _ = policy.terminal_authority_allowed(
             phase="TESTING",
             action="READY_TO_BEGIN_RELEASE_QUALIFICATION",
@@ -144,17 +253,14 @@ def falsify(repo: str, sha: str) -> dict[str, object]:
         if allowed:
             raise AssertionError("R7-01 FAILED: naked HUMAN_GOVERNANCE_OWNER + booleans granted terminal authority")
 
-        # R7-02: root identity/pin in the candidate mirror must match the independent floor.
-        ext = load_module(ext_path)
+        ext = load_module(ext_path, "candidate_external_root")
         assert_equal(ext.EXTERNAL_REPOSITORY, EXPECTED_EXTERNAL_ROOT_REPOSITORY, "external root repository")
         assert_equal(ext.EXTERNAL_REPOSITORY_ID, EXPECTED_EXTERNAL_ROOT_REPOSITORY_ID, "external root repository id")
         assert_equal(ext.EXTERNAL_ROOT_COMMIT, EXPECTED_EXTERNAL_ROOT_COMMIT, "external root commit")
         assert_equal(ext.EXPECTED_PUBLIC_KEY_DER_SHA256, EXPECTED_EXTERNAL_ROOT_DER_SHA256, "external root key fingerprint")
-
-        # R7-06: candidate cannot remap current TESTING defects into later phases.
         assert_equal(dict(policy.GOVERNED_RULE_PHASES), EXPECTED_RULE_PHASES, "governed rule phase map")
 
-        # Candidate tests are useful execution evidence but never the authority source.
+        # Candidate tests remain execution evidence, never the authority source.
         run([
             sys.executable, "-m", "unittest", "-v",
             "test_phase_policy.py",
@@ -178,7 +284,10 @@ def falsify(repo: str, sha: str) -> dict[str, object]:
             "authority_effect": "NONE_EVIDENCE_ONLY",
             "external_checker": True,
             "external_root_live_verified": True,
+            "live_ruleset_source_binding_verified": True,
             "policy_blob_externally_pinned": EXPECTED_POLICY_BLOB_SHA,
+            "manual_authority_verifier_blob_externally_pinned": EXPECTED_MANUAL_AUTHORITY_VERIFIER_BLOB_SHA,
+            "policy_facade_blob_externally_pinned": EXPECTED_POLICY_FACADE_BLOB_SHA,
         }
 
 
