@@ -38,6 +38,7 @@ FORBIDDEN_DYNAMIC_SYMBOLS = frozenset({
     "__import__", "import_module", "exec", "eval", "compile", "getattr",
 })
 FORBIDDEN_DYNAMIC_MODULES = frozenset({"importlib", "runpy", "builtins"})
+FORBIDDEN_DYNAMIC_BASES = frozenset({"importlib", "builtins", "__builtins__"})
 
 
 def _blob_sha(repo: Path, relpath: str) -> str:
@@ -65,7 +66,6 @@ def _local_module_relpath(runtime: Path, module_name: str) -> str | None:
     package_init = runtime.joinpath(*parts, "__init__.py")
     if package_init.is_file():
         return package_init.relative_to(runtime).as_posix()
-    # Preserve top-level fallback for ordinary absolute imports.
     root = parts[0]
     module_file = runtime / f"{root}.py"
     if module_file.is_file():
@@ -80,25 +80,42 @@ def _constant_string(node: ast.AST) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
+def _attribute_root(node: ast.AST) -> str | None:
+    current = node
+    while isinstance(current, ast.Attribute):
+        current = current.value
+    return current.id if isinstance(current, ast.Name) else None
+
+
 def _forbidden_dynamic_node(node: ast.AST) -> bool:
-    # Reject direct references, aliases, and attribute access to the dangerous
-    # capability, not merely calls. This catches `x = exec`, `builtins.exec`,
-    # `importlib.__import__`, etc.
+    # Direct builtin/dynamic symbol references are forbidden, including aliasing
+    # such as `fn = exec`. Ordinary methods with the same terminal name (for
+    # example `re.compile`) are not equivalent to the builtin capability.
     if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
         return node.id in FORBIDDEN_DYNAMIC_SYMBOLS
-    if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
-        return node.attr in FORBIDDEN_DYNAMIC_SYMBOLS
 
-    # `getattr(obj, name)` is itself denied in the authority-relevant runtime;
-    # this removes string-construction/alias variants of reflective lookup.
+    # Explicit dangerous-module attribute access is forbidden. Imports of these
+    # modules are independently forbidden below, so aliases cannot create a
+    # static bypass without already tripping that rule.
+    if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+        return (
+            node.attr in FORBIDDEN_DYNAMIC_SYMBOLS
+            and _attribute_root(node) in FORBIDDEN_DYNAMIC_BASES
+        )
+
+    # Reflective lookup itself is forbidden in authority-relevant runtime. This
+    # closes computed-string variants such as getattr(obj, 'ex' + 'ec').
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr":
         return True
 
-    # Catch dictionary/subscript access such as __builtins__["exec"] and
-    # variants where the base object has been obtained indirectly.
+    # Reject builtin dictionary dispatch, but do not confuse an unrelated
+    # application dictionary key named "compile" with Python's compile builtin.
     if isinstance(node, ast.Subscript):
         key = _constant_string(node.slice)
-        return key in FORBIDDEN_DYNAMIC_SYMBOLS
+        base = _attribute_root(node.value)
+        if isinstance(node.value, ast.Name):
+            base = node.value.id
+        return base in {"builtins", "__builtins__"} and key in FORBIDDEN_DYNAMIC_SYMBOLS
     return False
 
 
