@@ -1,0 +1,33 @@
+name: Package RELEASE R3 Full Independent Review V3
+
+on:
+  push:
+    branches:
+      - package/release-r3-full-independent-review
+    paths:
+      - 'scripts/package_release_r3_review.sh'
+      - 'evidence/RELEASE-R3-INDEPENDENT-REVIEW-INSTRUCTIONS.txt'
+      - '.github/workflows/package-release-r3-full-independent-review-v3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout packet branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Build exact-source packet
+        shell: bash
+        run: bash scripts/package_release_r3_review.sh
+
+      - name: Upload plain-text packet
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-r3-full-independent-review-packet-v3
+          path: RELEASE-R3-FULL-INDEPENDENT-REVIEW-6d4fbb9c-DEEPSEEK.txt
+          if-no-files-found: error
+          retention-days: 7
