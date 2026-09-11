@@ -32,9 +32,18 @@ class R11HarnessTests(unittest.TestCase):
         cls.entry = load_entry()
 
     def run_runner(self, source: str):
+        # Mirror the production runner shape: an exact Git checkout with a
+        # governance-runtime directory, rather than a detached temp directory.
         with tempfile.TemporaryDirectory() as td:
-            runtime = Path(td)
+            root = Path(td)
+            runtime = root / "governance-runtime"
+            runtime.mkdir()
             (runtime / "test_sample.py").write_text(source, encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=root, check=True)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
             return subprocess.run(
                 [sys.executable, "-I", str(RUNNER), str(runtime), "test_sample.py"],
                 stdout=subprocess.PIPE,
