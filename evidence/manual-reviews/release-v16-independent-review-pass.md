@@ -71,7 +71,30 @@ No change. V2 `SETUGO_REVIEW_ADJUDICATION_ED25519_V2` binding, `validate_root_me
 - The v14 hardening regression source is embedded: `test_seccomp_is_two_stage_and_explicit` asserts one `seccomp=` argument is present, checks the profile contains the intended denials and not `execve`/`execveat`, and asserts the source of `_install_kernel_exec_seccomp` is invoked before `_original_install_runtime_guard` in `_install_runtime_guard_v3`.
 - The real-Docker smoke test (`test_real_docker_sandbox_smoke`) requires the `F02_RUNTIME_SECCOMP execve=denied` marker in stdout.
 - The R11 workflow executes both test files and `verify_release_runtime_import_closure.py`.
-- Concrete failure paths: none demonstrated. Informational note — the pre-start profile is a denylist (`SCMP_ACT_ALLOW` default) rather than a syscall allowlist. This is a defense-in-depth reduction in kernel attack surface relative to Docker's default seccomp profile, but with `--cap-drop ALL`, `--no-new-privileges`, `--network none`, `--read-on��="24blocking
+- Concrete failure paths: none demonstrated. Informational note — the pre-start profile is a denylist (`SCMP_ACT_ALLOW` default) rather than a syscall allowlist. This is a defense-in-depth reduction in kernel attack surface relative to Docker's default seccomp profile, but with `--cap-drop ALL`, `--no-new-privileges`, `--network none`, `--read-only`, `--pids-limit 1`, and the post-bootstrap `execve`/`execveat` filter all active, no candidate-varying false-green path is shown. The reviewer instruction explicitly warns against promoting optional hardening into blocking findings without a concrete false-green path; none exists here.
+
+### F-02-d — Governance-root redirect failure
+
+**Status: CLOSED**
+
+- `run_candidate_unittests_sandboxed_v2.py` defines `_NoRedirect(urllib.request.HTTPRedirectHandler)` whose `redirect_request` returns `None` — the standard idiom for suppressing redirect following — and builds `_OPENER = urllib.request.build_opener(_NoRedirect)`.
+- `_host_fetch` uses `_OPENER.open(request, timeout=10)`, checks `response.geturl() == url` after opening, and wraps `urllib.error.HTTPError` into `RuntimeError`. Redirects are rejected before the body is returned to the container.
+- `test_root_proxy_rejects_redirected_final_url` (embedded) mocks `_OPENER.open` to return a response whose `geturl()` differs from the requested URL and asserts `RuntimeError("redirect not permitted")`.
+- Concrete failure paths: none — the `_NoRedirect` handler prevents urllib from following redirects; the `geturl()` equality check is a secondary defense if a redirect is ever followed despite the handler.
+
+### F-02-e — Explicit RELEASE sandbox wiring and non-empty pin union
+
+**Status: CLOSED (inherited from v15)**
+
+The v15-embedded `falsify_candidate_release_current.py` and `falsify_candidate_r10_entry.py` remain in force; the mechanism is unchanged by v16. RELEASE sets `release.r10.REQUIRE_EXTERNAL_SANDBOX = True` and populates `RUNTIME_PINNED_BLOBS` from the union of `runtime_closure.PINNED_RUNTIME_BLOBS`, `release.EXTRA_EXECUTION_BLOBS`, and `r9.EXPECTED_QUALIFICATION_TEST_BLOBS`, with empty-union failure at import time and empty-manifest failure at R10 invocation time when `REQUIRE_EXTERNAL_SANDBOX` is true.
+
+### F-02-f — `--pids-limit 1` and threading
+
+**Status: INFORMATIONAL (unchanged)**
+
+The Docker command still uses `--pids-limit 1`. With the pre-start seccomp profile denying `clone`/`clone3`, thread creation is blocked at the syscall layer regardless of PID accounting. This is a design tradeoff, not a false-green.
+
+### Optional observations — not blocking
 
 - **`.gitattributes` clean/smudge and `git hash-object`.** As previously noted, `git hash-object -- <path>` hashes raw file bytes; if a path-attribute clean filter is defined, the working-tree bytes differ from the HEAD blob and the check would reject a legitimate file. The failure direction is over-rejection (false-red), not false-green, so this is not a blocking finding under the reviewer instruction.
 - **`release.r10` module-identity.** The release wrapper writes `release.r10.REQUIRE_EXTERNAL_SANDBOX = True` and `release.r10.RUNTIME_PINNED_BLOBS = ...` via attribute mutation on the `falsify_candidate_r10_entry` module. In the standard import path this is the same module object the R10 entry reads. A future refactor that reimports that module under a different name could break the coupling, but no such refactor exists today, and no false-green path is shown. Not blocking.
