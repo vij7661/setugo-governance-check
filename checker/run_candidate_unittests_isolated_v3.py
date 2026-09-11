@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Sandbox-side qualification runner.
 
-This process executes inside the checker-owned OS sandbox. It preserves the
-reviewed base exact-blob/import/audit controls, but does not create any helper
-process in the candidate namespace. Exact frozen OpenSSL operations are proxied
-to a checker-owned host helper over an AF_UNIX socket. All direct process/native
-capabilities remain denied in-process as defense in depth; the outer sandbox is
-the authority boundary.
+The trusted host launcher verifies every manifest Git blob before this process
+starts. Inside the one-PID sandbox, the base runner reuses that verified map
+without spawning git. Exact frozen OpenSSL operations are proxied to the host
+helper over AF_UNIX. All direct process/native capabilities remain denied in
+process as defense in depth; the outer sandbox is the authority boundary.
 
 Authority effect: NONE_EVIDENCE_ONLY.
 """
@@ -47,8 +46,7 @@ def _recv_line(sock: socket.socket) -> bytes:
         chunks.append(chunk)
         if b"\n" in chunk:
             break
-    data = b"".join(chunks)
-    return data.split(b"\n", 1)[0]
+    return b"".join(chunks).split(b"\n", 1)[0]
 
 
 def _helper_request(payload: dict[str, object]) -> dict[str, object]:
@@ -73,7 +71,6 @@ def _install_process_denials() -> None:
         import posix as posix_module
     except ImportError:
         posix_module = None
-
     names = (
         "system", "fork", "forkpty",
         "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp", "execlpe",
@@ -85,7 +82,6 @@ def _install_process_denials() -> None:
             setattr(os_module, name, _deny_capability)
         if posix_module is not None and hasattr(posix_module, name):
             setattr(posix_module, name, _deny_capability)
-
     subprocess._fork_exec = _deny_capability
     low = sys.modules.get("_posixsubprocess")
     if low is not None and hasattr(low, "fork_exec"):
@@ -107,7 +103,24 @@ def _install_ctypes_denials() -> None:
 
 
 def _install_runtime_guard_v3(candidate_root: Path, runtime: Path, selected: list[str], manifest: dict[str, str]) -> None:
-    _original_install_runtime_guard(candidate_root, runtime, selected, manifest)
+    if not manifest:
+        raise RuntimeError("host-verified execution manifest is empty")
+
+    original_git_blob_sha = base._git_blob_sha
+    def verified_blob_lookup(root: Path, relpath: str) -> str:
+        if root.resolve() != candidate_root.resolve():
+            raise RuntimeError("sandbox manifest lookup escaped candidate root")
+        try:
+            return manifest[Path(relpath).as_posix()]
+        except KeyError as exc:
+            raise RuntimeError(f"sandbox manifest missing authorized path: {relpath}") from exc
+
+    base._git_blob_sha = verified_blob_lookup
+    try:
+        _original_install_runtime_guard(candidate_root, runtime, selected, manifest)
+    finally:
+        base._git_blob_sha = original_git_blob_sha
+
     _install_process_denials()
     _install_ctypes_denials()
     v2._install_subinterpreter_guard()
@@ -132,7 +145,6 @@ def _install_runtime_guard_v3(candidate_root: Path, runtime: Path, selected: lis
         })
         if not response.get("ok"):
             raise RuntimeError("runtime guard crypto helper rejected request")
-
         def decode_field(name: str):
             value = response.get(name)
             if value is None:
@@ -140,7 +152,6 @@ def _install_runtime_guard_v3(candidate_root: Path, runtime: Path, selected: lis
             if response.get(f"{name}_b64"):
                 return base64.b64decode(str(value))
             return value
-
         completed = subprocess.CompletedProcess(
             list(argv), int(response["returncode"]), decode_field("stdout"), decode_field("stderr")
         )
@@ -151,7 +162,6 @@ def _install_runtime_guard_v3(candidate_root: Path, runtime: Path, selected: lis
         return completed
 
     subprocess.run = guarded_run
-
     immediate = getattr(base, "_immediate_caller_is_candidate", None)
     stack_check = getattr(base, "_stack_contains_candidate", None)
     if not callable(immediate) or not callable(stack_check):
