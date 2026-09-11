@@ -1,0 +1,14 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"],
+  "syscalls": [
+    {
+      "names": [
+        "clone", "clone3", "fork", "vfork", "execveat", "unshare", "setns",
+        "ptrace", "bpf", "mount", "umount2", "pivot_root", "chroot",
+        "kexec_load", "kexec_file_load", "init_module", "finit_module", "delete_module"
+      ],
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}
