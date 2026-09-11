@@ -33,13 +33,21 @@ class ReleaseR2EvidenceTests(unittest.TestCase):
         cls.entry = load_entry()
 
     def run_runner(self, files: dict[str, str], *, env: dict[str, str] | None = None):
+        # Mirror the production contract: the runner executes inside an exact
+        # Git checkout whose candidate runtime is governance-runtime/.
         with tempfile.TemporaryDirectory() as td:
-            runtime = Path(td) / "governance-runtime"
+            root = Path(td)
+            runtime = root / "governance-runtime"
             runtime.mkdir()
             for name, source in files.items():
                 path = runtime / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(source, encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=root, check=True)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
             completed = subprocess.run(
                 [sys.executable, "-I", str(RUNNER), str(runtime), "test_sample.py"],
                 stdout=subprocess.PIPE,
