@@ -14,13 +14,17 @@ RUNNER = HERE / "run_candidate_unittests_isolated.py"
 
 
 class ReleaseRuntimeExecutionGuardTests(unittest.TestCase):
-    def _repo(self, files: dict[str, str]):
+    def _repo(self, runtime_files: dict[str, str], root_files: dict[str, str] | None = None):
         td = tempfile.TemporaryDirectory(prefix="setugo-runtime-exec-guard-")
         repo = Path(td.name)
         runtime = repo / "governance-runtime"
         runtime.mkdir(parents=True)
-        for relpath, content in files.items():
+        for relpath, content in runtime_files.items():
             path = runtime / relpath
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        for relpath, content in (root_files or {}).items():
+            path = repo / relpath
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -30,13 +34,16 @@ class ReleaseRuntimeExecutionGuardTests(unittest.TestCase):
         subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
         return td, repo, runtime
 
-    def _blob(self, repo: Path, relpath: str) -> str:
+    def _blob(self, repo: Path, candidate_relpath: str) -> str:
         out = subprocess.check_output(
-            ["git", "ls-tree", "HEAD", "--", f"governance-runtime/{relpath}"],
+            ["git", "ls-tree", "HEAD", "--", candidate_relpath],
             cwd=repo,
             text=True,
         ).strip().split()
         return out[2]
+
+    def _manifest(self, repo: Path, *candidate_relpaths: str) -> dict[str, str]:
+        return {relpath: self._blob(repo, relpath) for relpath in candidate_relpaths}
 
     def _run(self, runtime: Path, manifest: dict[str, str], *tests: str):
         encoded = base64.b64encode(
@@ -69,12 +76,34 @@ class ReleaseRuntimeExecutionGuardTests(unittest.TestCase):
             ),
         })
         try:
-            result = self._run(runtime, {"pinned.py": self._blob(repo, "pinned.py")}, "test_entry.py")
+            manifest = self._manifest(
+                repo,
+                "governance-runtime/pinned.py",
+                "governance-runtime/test_entry.py",
+            )
+            result = self._run(runtime, manifest, "test_entry.py")
             self.assertEqual(0, result.returncode, result.stdout)
         finally:
             td.cleanup()
 
-    def test_indirect_import_of_unpinned_candidate_module_fails_closed(self):
+    def test_selected_test_must_itself_be_exact_pinned(self):
+        td, repo, runtime = self._repo({
+            "pinned.py": "VALUE = 1\n",
+            "test_entry.py": (
+                "import unittest\nimport pinned\n"
+                "class T(unittest.TestCase):\n"
+                "    def test_value(self): self.assertEqual(1, pinned.VALUE)\n"
+            ),
+        })
+        try:
+            manifest = self._manifest(repo, "governance-runtime/pinned.py")
+            result = self._run(runtime, manifest, "test_entry.py")
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("qualification test modules are not exact-pinned", result.stdout)
+        finally:
+            td.cleanup()
+
+    def test_indirect_import_of_unpinned_runtime_module_fails_closed(self):
         td, repo, runtime = self._repo({
             "pinned.py": (
                 "import importlib\n"
@@ -88,29 +117,124 @@ class ReleaseRuntimeExecutionGuardTests(unittest.TestCase):
             ),
         })
         try:
-            result = self._run(runtime, {"pinned.py": self._blob(repo, "pinned.py")}, "test_entry.py")
+            manifest = self._manifest(
+                repo,
+                "governance-runtime/pinned.py",
+                "governance-runtime/test_entry.py",
+            )
+            result = self._run(runtime, manifest, "test_entry.py")
             self.assertNotEqual(0, result.returncode)
             self.assertIn("runtime guard rejected unpinned candidate-local module", result.stdout)
         finally:
             td.cleanup()
 
-    def test_runpy_execution_of_unpinned_candidate_file_fails_closed(self):
+    def test_sys_path_import_of_unpinned_module_outside_runtime_fails_closed(self):
+        td, repo, runtime = self._repo(
+            {
+                "pinned.py": (
+                    "import importlib, sys\nfrom pathlib import Path\n"
+                    "def load_hidden():\n"
+                    "    sys.path.append(str(Path(__file__).resolve().parent.parent / 'other'))\n"
+                    "    return importlib.import_module('hidden')\n"
+                ),
+                "test_entry.py": (
+                    "import unittest\nimport pinned\n"
+                    "class T(unittest.TestCase):\n"
+                    "    def test_hidden(self): self.assertEqual(11, pinned.load_hidden().VALUE)\n"
+                ),
+            },
+            {"other/hidden.py": "VALUE = 11\n"},
+        )
+        try:
+            manifest = self._manifest(
+                repo,
+                "governance-runtime/pinned.py",
+                "governance-runtime/test_entry.py",
+            )
+            result = self._run(runtime, manifest, "test_entry.py")
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("runtime guard rejected unpinned candidate-local module", result.stdout)
+            self.assertIn("other/hidden.py", result.stdout)
+        finally:
+            td.cleanup()
+
+    def test_runpy_execution_of_unpinned_file_outside_runtime_fails_closed(self):
+        td, repo, runtime = self._repo(
+            {
+                "pinned.py": (
+                    "import runpy\nfrom pathlib import Path\n"
+                    "def load_hidden():\n"
+                    "    path = Path(__file__).resolve().parent.parent / 'other' / 'hidden.py'\n"
+                    "    return runpy.run_path(str(path))\n"
+                ),
+                "test_entry.py": (
+                    "import unittest\nimport pinned\n"
+                    "class T(unittest.TestCase):\n"
+                    "    def test_hidden(self): self.assertEqual(13, pinned.load_hidden()['VALUE'])\n"
+                ),
+            },
+            {"other/hidden.py": "VALUE = 13\n"},
+        )
+        try:
+            manifest = self._manifest(
+                repo,
+                "governance-runtime/pinned.py",
+                "governance-runtime/test_entry.py",
+            )
+            result = self._run(runtime, manifest, "test_entry.py")
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("runtime guard rejected execution of unpinned candidate file", result.stdout)
+            self.assertIn("other/hidden.py", result.stdout)
+        finally:
+            td.cleanup()
+
+    def test_subprocess_child_interpreter_escape_fails_closed(self):
+        td, repo, runtime = self._repo(
+            {
+                "pinned.py": (
+                    "import subprocess, sys\nfrom pathlib import Path\n"
+                    "def execute_hidden():\n"
+                    "    path = Path(__file__).resolve().parent.parent / 'other' / 'hidden.py'\n"
+                    "    subprocess.run([sys.executable, str(path)], check=True)\n"
+                ),
+                "test_entry.py": (
+                    "import unittest\nimport pinned\n"
+                    "class T(unittest.TestCase):\n"
+                    "    def test_child(self): pinned.execute_hidden()\n"
+                ),
+            },
+            {"other/hidden.py": "raise SystemExit(0)\n"},
+        )
+        try:
+            manifest = self._manifest(
+                repo,
+                "governance-runtime/pinned.py",
+                "governance-runtime/test_entry.py",
+            )
+            result = self._run(runtime, manifest, "test_entry.py")
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("candidate-originated process/native execution: subprocess.Popen", result.stdout)
+        finally:
+            td.cleanup()
+
+    def test_os_system_escape_fails_closed(self):
         td, repo, runtime = self._repo({
-            "pinned.py": (
-                "import runpy\nfrom pathlib import Path\n"
-                "def load_hidden(): return runpy.run_path(str(Path(__file__).with_name('hidden.py')))\n"
-            ),
-            "hidden.py": "VALUE = 9\n",
+            "pinned.py": "import os\ndef execute(): os.system('true')\n",
             "test_entry.py": (
                 "import unittest\nimport pinned\n"
                 "class T(unittest.TestCase):\n"
-                "    def test_hidden(self): self.assertEqual(9, pinned.load_hidden()['VALUE'])\n"
+                "    def test_os(self): pinned.execute()\n"
             ),
         })
         try:
-            result = self._run(runtime, {"pinned.py": self._blob(repo, "pinned.py")}, "test_entry.py")
+            manifest = self._manifest(
+                repo,
+                "governance-runtime/pinned.py",
+                "governance-runtime/test_entry.py",
+            )
+            result = self._run(runtime, manifest, "test_entry.py")
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("runtime guard rejected execution of unpinned candidate file", result.stdout)
+            self.assertIn("candidate-originated process/native execution: os.system", result.stdout)
         finally:
             td.cleanup()
 
@@ -129,13 +253,18 @@ class ReleaseRuntimeExecutionGuardTests(unittest.TestCase):
             ),
         })
         try:
-            result = self._run(runtime, {"pinned.py": self._blob(repo, "pinned.py")}, "test_entry.py")
+            manifest = self._manifest(
+                repo,
+                "governance-runtime/pinned.py",
+                "governance-runtime/test_entry.py",
+            )
+            result = self._run(runtime, manifest, "test_entry.py")
             self.assertNotEqual(0, result.returncode)
             self.assertIn("runtime guard rejected synthetic dynamic code execution", result.stdout)
         finally:
             td.cleanup()
 
-    def test_dynamic_exec_spoofing_pinned_filename_fails_closed(self):
+    def test_dynamic_compile_spoofing_pinned_filename_fails_closed(self):
         td, repo, runtime = self._repo({
             "pinned.py": (
                 "import builtins\n"
@@ -150,9 +279,14 @@ class ReleaseRuntimeExecutionGuardTests(unittest.TestCase):
             ),
         })
         try:
-            result = self._run(runtime, {"pinned.py": self._blob(repo, "pinned.py")}, "test_entry.py")
+            manifest = self._manifest(
+                repo,
+                "governance-runtime/pinned.py",
+                "governance-runtime/test_entry.py",
+            )
+            result = self._run(runtime, manifest, "test_entry.py")
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("runtime guard rejected direct dynamic code execution", result.stdout)
+            self.assertIn("candidate-originated dynamic compilation", result.stdout)
         finally:
             td.cleanup()
 
@@ -166,7 +300,9 @@ class ReleaseRuntimeExecutionGuardTests(unittest.TestCase):
             ),
         })
         try:
-            result = self._run(runtime, {"pinned.py": "0" * 40}, "test_entry.py")
+            manifest = self._manifest(repo, "governance-runtime/test_entry.py")
+            manifest["governance-runtime/pinned.py"] = "0" * 40
+            result = self._run(runtime, manifest, "test_entry.py")
             self.assertNotEqual(0, result.returncode)
             self.assertIn("runtime guard blob mismatch", result.stdout)
         finally:
