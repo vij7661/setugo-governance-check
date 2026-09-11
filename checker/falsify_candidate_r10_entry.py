@@ -2,13 +2,15 @@
 """R11-hardened external-checker entry point for the R10 qualification path.
 
 Qualification test execution is routed through a checker-owned out-of-process
-sandbox. Candidate code does not execute directly in the checker interpreter.
+sandbox. Candidate code has no network; the host launcher may use the existing
+governance token only for the frozen governance-root proxy contract.
 Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -89,9 +91,9 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
     if explicit_test_args:
         if not RUNTIME_PINNED_BLOBS:
             raise AssertionError("RELEASE sandbox execution manifest is empty")
-        launcher = Path(__file__).resolve().with_name("run_candidate_unittests_sandboxed.py")
+        launcher = Path(__file__).resolve().with_name("run_candidate_unittests_sandboxed_v2.py")
         if not launcher.is_file():
-            raise AssertionError("checker-owned RELEASE sandbox launcher is missing")
+            raise AssertionError("checker-owned RELEASE sandbox/root-proxy launcher is missing")
         runner_cmd = [
             sys.executable,
             str(launcher),
@@ -100,12 +102,11 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
             _manifest_b64(),
             *explicit_test_args,
         ]
-        subprocess.run(
-            runner_cmd,
-            cwd=checker.CHECKER_ROOT,
-            env={"PATH": str(Path(sys.executable).resolve().parent) + ":/usr/local/bin:/usr/bin:/bin"},
-            check=True,
-        )
+        host_env = {"PATH": str(Path(sys.executable).resolve().parent) + ":/usr/local/bin:/usr/bin:/bin"}
+        token = os.environ.get("GOVERNANCE_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        if token:
+            host_env["GOVERNANCE_GITHUB_TOKEN"] = token
+        subprocess.run(runner_cmd, cwd=checker.CHECKER_ROOT, env=host_env, check=True)
         return
 
     if _looks_like_test_runner(cmd):
