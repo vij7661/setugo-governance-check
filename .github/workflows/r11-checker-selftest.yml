@@ -38,7 +38,8 @@ jobs:
             test_release_runtime_execution_guard.py \
             test_release_runtime_capability_semantics.py \
             test_release_f02_residual_guards.py \
-            test_release_f02_external_sandbox.py
+            test_release_f02_external_sandbox.py \
+            test_release_f02_root_proxy.py
 
       - name: Run hardened closure against exact frozen RELEASE candidate
         working-directory: checker
