@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import importlib.util
 import multiprocessing
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -104,12 +103,24 @@ def _crypto_helper(conn, candidate_root_s: str, temp_root_s: str, trusted_openss
         if timeout is not None and not isinstance(timeout, (int, float)):
             conn.send({"ok": False, "error": "invalid timeout"})
             continue
+        text_mode = request.get("text") is True
+        encoding = request.get("encoding")
+        errors = request.get("errors")
+        if encoding is not None and not isinstance(encoding, str):
+            conn.send({"ok": False, "error": "invalid encoding"})
+            continue
+        if errors is not None and not isinstance(errors, str):
+            conn.send({"ok": False, "error": "invalid errors mode"})
+            continue
         try:
             result = subprocess.run(
                 list(argv),
                 stdout=subprocess.PIPE if request.get("capture_stdout") else None,
                 stderr=subprocess.PIPE if request.get("capture_stderr") else None,
                 timeout=timeout,
+                text=text_mode,
+                encoding=encoding,
+                errors=errors,
                 check=False,
             )
             conn.send({"ok": True, "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
@@ -142,8 +153,6 @@ def _external_execution_audit(candidate_root: Path):
 
 
 def _install_runtime_guard_v2(candidate_root: Path, runtime: Path, selected: list[str], manifest: dict[str, str]) -> None:
-    # First perform all base exact-blob checks while checker subprocess support is
-    # still intact. Candidate code has not been imported yet.
     _original_install_runtime_guard(candidate_root, runtime, selected, manifest)
 
     trusted_openssl = base.TRUSTED_OPENSSL_PATH
@@ -162,9 +171,11 @@ def _install_runtime_guard_v2(candidate_root: Path, runtime: Path, selected: lis
     def guarded_run(argv, *args, **kwargs):
         if args:
             raise RuntimeError("runtime guard rejected unsupported subprocess positional arguments")
-        allowed_keys = {"stdout", "stderr", "timeout", "check"}
+        allowed_keys = {"stdout", "stderr", "timeout", "check", "text", "encoding", "errors"}
         if set(kwargs) - allowed_keys:
             raise RuntimeError("runtime guard rejected unsupported subprocess options")
+        if kwargs.get("text") not in (None, False, True):
+            raise RuntimeError("runtime guard rejected invalid text mode")
         if not base._openssl_argv_allowed(argv, candidate_root):
             raise RuntimeError("runtime guard rejected candidate-originated subprocess execution")
         parent_conn.send({
@@ -173,6 +184,9 @@ def _install_runtime_guard_v2(candidate_root: Path, runtime: Path, selected: lis
             "capture_stdout": kwargs.get("stdout") == subprocess.PIPE,
             "capture_stderr": kwargs.get("stderr") == subprocess.PIPE,
             "timeout": kwargs.get("timeout"),
+            "text": kwargs.get("text") is True,
+            "encoding": kwargs.get("encoding"),
+            "errors": kwargs.get("errors"),
         })
         response = parent_conn.recv()
         if not isinstance(response, dict) or not response.get("ok"):
@@ -186,7 +200,6 @@ def _install_runtime_guard_v2(candidate_root: Path, runtime: Path, selected: lis
             )
         return completed
 
-    # Candidate interpreter no longer retains a usable low-level process primitive.
     subprocess._fork_exec = _deny_fork_exec
     low = sys.modules.get("_posixsubprocess")
     if low is not None:
