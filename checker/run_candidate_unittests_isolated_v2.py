@@ -5,10 +5,11 @@ This wrapper preserves the reviewed whole-checkout exact-pin policy while
 removing low-level process creation from the candidate interpreter entirely.
 A checker-controlled helper is started before candidate code loads and is the
 only component allowed to execute the frozen OpenSSL Ed25519/DER operations.
-The candidate interpreter permanently denies direct fork_exec access and routes
-only exact approved OpenSSL requests to that helper. It also rejects candidate-
-triggered execution of any real external file outside the checkout and trusted
-stdlib roots, regardless of filename extension.
+The candidate interpreter permanently denies direct fork_exec access, dynamic
+code-object construction/deserialization, subinterpreter execution, and direct
+low-level ctypes execution capabilities. It also rejects candidate-triggered
+execution of any real external file outside the checkout and trusted stdlib
+roots, regardless of filename extension.
 
 Authority effect: NONE_EVIDENCE_ONLY.
 """
@@ -128,12 +129,59 @@ def _crypto_helper(conn, candidate_root_s: str, temp_root_s: str, trusted_openss
             conn.send({"ok": False, "error": f"helper execution failed: {type(exc).__name__}"})
 
 
+def _deny_capability(*args, **kwargs):
+    raise RuntimeError("runtime guard rejected forbidden candidate execution capability")
+
+
 def _deny_fork_exec(*args, **kwargs):
     raise RuntimeError("runtime guard rejected direct low-level process execution: fork_exec")
 
 
-def _external_execution_audit(candidate_root: Path):
+def _install_subinterpreter_guard() -> None:
+    for module_name in ("_interpreters", "_xxsubinterpreters"):
+        try:
+            module = __import__(module_name)
+        except ImportError:
+            continue
+        for attr in (
+            "create",
+            "exec",
+            "run_string",
+            "run_func",
+            "call",
+            "set___main___attrs",
+        ):
+            if hasattr(module, attr):
+                setattr(module, attr, _deny_capability)
+
+
+def _install_low_level_ctypes_guard() -> None:
+    try:
+        module = __import__("_ctypes")
+    except ImportError:
+        return
+    for attr in ("dlopen", "dlsym", "call_function", "call_cdeclfunction"):
+        if hasattr(module, attr):
+            setattr(module, attr, _deny_capability)
+
+
+def _execution_capability_audit(candidate_root: Path):
+    direct_dynamic_events = {
+        "code.__new__",
+        "function.__new__",
+        "marshal.load",
+        "marshal.loads",
+    }
+
     def audit(event, args):
+        if event in direct_dynamic_events:
+            immediate = getattr(base, "_immediate_caller_is_candidate", None)
+            if immediate is not None and immediate(candidate_root):
+                raise RuntimeError(
+                    f"runtime guard rejected direct dynamic code capability: {event}"
+                )
+            return
+
         if event != "exec" or not args or not base._stack_contains_candidate(candidate_root, 2):
             return
         filename = getattr(args[0], "co_filename", "")
@@ -206,7 +254,9 @@ def _install_runtime_guard_v2(candidate_root: Path, runtime: Path, selected: lis
         low.fork_exec = _deny_fork_exec
     subprocess.run = guarded_run
 
-    sys.addaudithook(_external_execution_audit(candidate_root))
+    _install_subinterpreter_guard()
+    _install_low_level_ctypes_guard()
+    sys.addaudithook(_execution_capability_audit(candidate_root))
 
 
 base._install_runtime_guard = _install_runtime_guard_v2
