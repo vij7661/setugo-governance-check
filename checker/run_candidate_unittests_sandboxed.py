@@ -27,6 +27,8 @@ SANDBOX_IMAGE = "python@sha256:581429e3df12d76e6af4be5ab7d0e7fc2013eb57dc23d2de6
 CONTAINER_CANDIDATE = Path("/candidate")
 CONTAINER_CHECKER = Path("/checker")
 CONTAINER_IO = Path("/sandbox-io")
+CHECKER_DIR = Path(__file__).resolve().parent
+SECCOMP_PROFILE = CHECKER_DIR / "seccomp-release-sandbox.json"
 
 
 def _decode_manifest(value: str) -> dict[str, str]:
@@ -48,10 +50,7 @@ def _decode_manifest(value: str) -> dict[str, str]:
 
 def _validate_manifest(candidate_root: Path, manifest: dict[str, str]) -> None:
     for relpath, expected in manifest.items():
-        result = subprocess.run(
-            ["git", "ls-tree", "HEAD", "--", relpath], cwd=candidate_root,
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-        )
+        result = subprocess.run(["git", "ls-tree", "HEAD", "--", relpath], cwd=candidate_root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         parts = result.stdout.strip().split()
         if len(parts) < 3 or parts[2] != expected:
             actual = parts[2] if len(parts) >= 3 else "MISSING"
@@ -64,10 +63,7 @@ def _verify_working_tree_matches_manifest(candidate_root: Path, manifest: dict[s
     if status.returncode != 0:
         raise RuntimeError("candidate working tree differs from HEAD; refusing sandbox execution")
     for relpath, expected in manifest.items():
-        actual = subprocess.run(
-            ["git", "hash-object", "--", relpath], cwd=candidate_root,
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-        ).stdout.strip()
+        actual = subprocess.run(["git", "hash-object", "--", relpath], cwd=candidate_root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.strip()
         if actual != expected:
             raise RuntimeError(f"working-tree content differs from manifest for {relpath}: {actual} != {expected}")
 
@@ -101,84 +97,61 @@ def _open_operand_fd(value: object, host_io: Path, *, output: bool) -> int | Non
     try:
         for part in parts[:-1]:
             next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
-            os.close(directory_fd)
-            directory_fd = next_fd
+            os.close(directory_fd); directory_fd = next_fd
         flags = os.O_NOFOLLOW | (os.O_WRONLY | os.O_CREAT | os.O_TRUNC if output else os.O_RDONLY)
         fd = os.open(parts[-1], flags, 0o600, dir_fd=directory_fd)
     finally:
         os.close(directory_fd)
     if not stat.S_ISREG(os.fstat(fd).st_mode):
-        os.close(fd)
-        return None
+        os.close(fd); return None
     return fd
 
 
 def _prepare_openssl_argv(argv: object, host_io: Path, trusted_openssl: Path) -> tuple[list[str], tuple[int, ...]] | None:
-    if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv):
-        return None
+    if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv): return None
     args = list(argv)
-    if args[0] not in {"openssl", str(trusted_openssl)}:
-        return None
+    if args[0] not in {"openssl", str(trusted_openssl)}: return None
     args[0] = str(trusted_openssl)
-    inputs: tuple[int, ...]
-    outputs: tuple[int, ...]
-    if len(args) == 9 and args[1:4] == ["pkey", "-pubin", "-in"] and args[5:8] == ["-outform", "DER", "-out"]:
-        inputs, outputs = (4,), (8,)
-    elif len(args) == 6 and args[1:5] == ["genpkey", "-algorithm", "ED25519", "-out"]:
-        inputs, outputs = (), (5,)
-    elif len(args) == 7 and args[1:3] == ["pkey", "-in"] and args[4:6] == ["-pubout", "-out"]:
-        inputs, outputs = (3,), (6,)
-    elif len(args) == 10 and args[1:3] == ["pkeyutl", "-sign"] and args[3] == "-inkey" and args[5:7] == ["-rawin", "-in"] and args[8] == "-out":
-        inputs, outputs = (4, 7), (9,)
-    elif len(args) == 11 and args[1:5] == ["pkeyutl", "-verify", "-pubin", "-inkey"] and args[6:8] == ["-rawin", "-in"] and args[9] == "-sigfile":
-        inputs, outputs = (5, 8, 10), ()
-    else:
-        return None
+    if len(args) == 9 and args[1:4] == ["pkey", "-pubin", "-in"] and args[5:8] == ["-outform", "DER", "-out"]: inputs, outputs = (4,), (8,)
+    elif len(args) == 6 and args[1:5] == ["genpkey", "-algorithm", "ED25519", "-out"]: inputs, outputs = (), (5,)
+    elif len(args) == 7 and args[1:3] == ["pkey", "-in"] and args[4:6] == ["-pubout", "-out"]: inputs, outputs = (3,), (6,)
+    elif len(args) == 10 and args[1:3] == ["pkeyutl", "-sign"] and args[3] == "-inkey" and args[5:7] == ["-rawin", "-in"] and args[8] == "-out": inputs, outputs = (4, 7), (9,)
+    elif len(args) == 11 and args[1:5] == ["pkeyutl", "-verify", "-pubin", "-inkey"] and args[6:8] == ["-rawin", "-in"] and args[9] == "-sigfile": inputs, outputs = (5, 8, 10), ()
+    else: return None
     opened: list[int] = []
     try:
         for index in inputs:
             fd = _open_operand_fd(args[index], host_io, output=False)
-            if fd is None:
-                raise RuntimeError("unsafe OpenSSL input operand")
-            opened.append(fd)
-            args[index] = f"/proc/self/fd/{fd}"
+            if fd is None: raise RuntimeError("unsafe OpenSSL input operand")
+            opened.append(fd); args[index] = f"/proc/self/fd/{fd}"
         for index in outputs:
             fd = _open_operand_fd(args[index], host_io, output=True)
-            if fd is None:
-                raise RuntimeError("unsafe OpenSSL output operand")
-            opened.append(fd)
-            args[index] = f"/proc/self/fd/{fd}"
+            if fd is None: raise RuntimeError("unsafe OpenSSL output operand")
+            opened.append(fd); args[index] = f"/proc/self/fd/{fd}"
         return args, tuple(opened)
     except Exception:
-        for fd in opened:
-            os.close(fd)
+        for fd in opened: os.close(fd)
         return None
 
 
 def _map_argv(argv: object, host_io: Path, trusted_openssl: Path) -> list[str] | None:
     prepared = _prepare_openssl_argv(argv, host_io, trusted_openssl)
-    if prepared is None:
-        return None
+    if prepared is None: return None
     args, fds = prepared
-    for fd in fds:
-        os.close(fd)
+    for fd in fds: os.close(fd)
     return args
 
 
 def _serve_helper(sock_path: Path, host_io: Path, stop: threading.Event, errors: list[str]) -> None:
     trusted = shutil.which("openssl")
     if trusted is None:
-        errors.append("trusted OpenSSL unavailable on checker host")
-        return
-    trusted_path = Path(trusted).resolve()
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        errors.append("trusted OpenSSL unavailable on checker host"); return
+    trusted_path = Path(trusted).resolve(); server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         server.bind(str(sock_path)); os.chmod(sock_path, 0o666); server.listen(8); server.settimeout(0.2)
         while not stop.is_set():
-            try:
-                conn, _ = server.accept()
-            except TimeoutError:
-                continue
+            try: conn, _ = server.accept()
+            except TimeoutError: continue
             with conn:
                 try:
                     request = json.loads(_recv_line(conn).decode("utf-8"))
@@ -187,32 +160,19 @@ def _serve_helper(sock_path: Path, host_io: Path, stop: threading.Event, errors:
                     text = request.get("text") is True if isinstance(request, dict) else False
                     encoding = request.get("encoding") if isinstance(request, dict) else None
                     errmode = request.get("errors") if isinstance(request, dict) else None
-                    if prepared is None or (timeout is not None and not isinstance(timeout, (int, float))):
-                        response = {"ok": False, "error": "request outside frozen OpenSSL contract"}
-                    elif encoding is not None and not isinstance(encoding, str):
-                        response = {"ok": False, "error": "invalid encoding"}
-                    elif errmode is not None and not isinstance(errmode, str):
-                        response = {"ok": False, "error": "invalid errors"}
+                    if prepared is None or (timeout is not None and not isinstance(timeout, (int, float))): response = {"ok": False, "error": "request outside frozen OpenSSL contract"}
+                    elif encoding is not None and not isinstance(encoding, str): response = {"ok": False, "error": "invalid encoding"}
+                    elif errmode is not None and not isinstance(errmode, str): response = {"ok": False, "error": "invalid errors"}
                     else:
                         mapped, fds = prepared
                         try:
-                            result = subprocess.run(
-                                mapped,
-                                stdout=subprocess.PIPE if request.get("capture_stdout") else None,
-                                stderr=subprocess.PIPE if request.get("capture_stderr") else None,
-                                timeout=timeout, text=text, encoding=encoding, errors=errmode,
-                                check=False, cwd=host_io, env={"PATH": os.environ.get("PATH", "")},
-                                pass_fds=fds,
-                            )
+                            result = subprocess.run(mapped, stdout=subprocess.PIPE if request.get("capture_stdout") else None, stderr=subprocess.PIPE if request.get("capture_stderr") else None, timeout=timeout, text=text, encoding=encoding, errors=errmode, check=False, cwd=host_io, env={"PATH": os.environ.get("PATH", "")}, pass_fds=fds)
                         finally:
-                            for fd in fds:
-                                os.close(fd)
+                            for fd in fds: os.close(fd)
                         response = {"ok": True, "returncode": result.returncode}
                         for name, value in (("stdout", result.stdout), ("stderr", result.stderr)):
-                            if isinstance(value, bytes):
-                                response[name] = base64.b64encode(value).decode("ascii"); response[f"{name}_b64"] = True
-                            else:
-                                response[name] = value
+                            if isinstance(value, bytes): response[name] = base64.b64encode(value).decode("ascii"); response[f"{name}_b64"] = True
+                            else: response[name] = value
                     conn.sendall(json.dumps(response, separators=(",", ":")).encode("utf-8") + b"\n")
                 except Exception as exc:
                     conn.sendall(json.dumps({"ok": False, "error": type(exc).__name__}).encode("utf-8") + b"\n")
@@ -221,56 +181,31 @@ def _serve_helper(sock_path: Path, host_io: Path, stop: threading.Event, errors:
 
 
 def _docker_available() -> None:
-    if shutil.which("docker") is None:
-        raise RuntimeError("Docker unavailable: RELEASE sandbox must fail closed")
+    if shutil.which("docker") is None: raise RuntimeError("Docker unavailable: RELEASE sandbox must fail closed")
     subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"], check=True, stdout=subprocess.PIPE, text=True)
 
 
 def _build_docker_cmd(candidate_root: Path, checker_dir: Path, host_io: Path, manifest_b64: str, tests: list[str]) -> list[str]:
-    seccomp = checker_dir / "seccomp-release-sandbox.json"
-    if not seccomp.is_file():
-        raise RuntimeError("RELEASE sandbox seccomp profile missing")
-    return [
-        "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
-        "--security-opt", "no-new-privileges", "--security-opt", f"seccomp={seccomp}",
-        "--pids-limit", "1", "--memory", "512m", "--cpus", "1.0",
-        "--user", f"{os.getuid()}:{os.getgid()}",
-        "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m",
-        "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "TMPDIR=/sandbox-io",
-        "-v", f"{candidate_root}:{CONTAINER_CANDIDATE}:ro",
-        "-v", f"{checker_dir}:{CONTAINER_CHECKER}:ro",
-        "-v", f"{host_io}:{CONTAINER_IO}:rw",
-        "-w", str(CONTAINER_CHECKER), SANDBOX_IMAGE,
-        "python", "-I", "/checker/run_candidate_unittests_isolated_v3.py",
-        "/candidate/governance-runtime", "--helper-socket", "/sandbox-io/crypto.sock",
-        "--runtime-pin-manifest-b64", manifest_b64, *tests,
-    ]
+    if not SECCOMP_PROFILE.is_file(): raise RuntimeError("RELEASE sandbox seccomp profile missing")
+    return ["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--security-opt", f"seccomp={SECCOMP_PROFILE}", "--pids-limit", "1", "--memory", "512m", "--cpus", "1.0", "--user", f"{os.getuid()}:{os.getgid()}", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m", "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "TMPDIR=/sandbox-io", "-v", f"{candidate_root}:{CONTAINER_CANDIDATE}:ro", "-v", f"{checker_dir}:{CONTAINER_CHECKER}:ro", "-v", f"{host_io}:{CONTAINER_IO}:rw", "-w", str(CONTAINER_CHECKER), SANDBOX_IMAGE, "python", "-I", "/checker/run_candidate_unittests_isolated_v3.py", "/candidate/governance-runtime", "--helper-socket", "/sandbox-io/crypto.sock", "--runtime-pin-manifest-b64", manifest_b64, *tests]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(); parser.add_argument("candidate_runtime"); parser.add_argument("--runtime-pin-manifest-b64", required=True); parser.add_argument("tests", nargs="+")
-    ns = parser.parse_args(); _docker_available()
-    runtime = Path(ns.candidate_runtime).resolve(); candidate_root = runtime.parent; checker_dir = Path(__file__).resolve().parent
-    if runtime.name != "governance-runtime" or not (candidate_root / ".git").exists():
-        raise RuntimeError("sandbox candidate checkout shape invalid")
-    manifest = _decode_manifest(ns.runtime_pin_manifest_b64)
-    _validate_manifest(candidate_root, manifest)
-    _verify_working_tree_matches_manifest(candidate_root, manifest)
+    ns = parser.parse_args(); _docker_available(); runtime = Path(ns.candidate_runtime).resolve(); candidate_root = runtime.parent; checker_dir = CHECKER_DIR
+    if runtime.name != "governance-runtime" or not (candidate_root / ".git").exists(): raise RuntimeError("sandbox candidate checkout shape invalid")
+    manifest = _decode_manifest(ns.runtime_pin_manifest_b64); _validate_manifest(candidate_root, manifest); _verify_working_tree_matches_manifest(candidate_root, manifest)
     with tempfile.TemporaryDirectory(prefix="setugo-release-sandbox-") as td:
-        host_io = Path(td).resolve(); os.chmod(host_io, 0o777); socket_path = host_io / "crypto.sock"
-        stop = threading.Event(); helper_errors: list[str] = []
+        host_io = Path(td).resolve(); os.chmod(host_io, 0o777); socket_path = host_io / "crypto.sock"; stop = threading.Event(); helper_errors: list[str] = []
         thread = threading.Thread(target=_serve_helper, args=(socket_path, host_io, stop, helper_errors), daemon=True); thread.start()
         for _ in range(100):
             if socket_path.exists() or helper_errors: break
             stop.wait(0.02)
-        if helper_errors or not socket_path.exists():
-            stop.set(); thread.join(timeout=1); raise RuntimeError(helper_errors[0] if helper_errors else "crypto helper socket did not start")
+        if helper_errors or not socket_path.exists(): stop.set(); thread.join(timeout=1); raise RuntimeError(helper_errors[0] if helper_errors else "crypto helper socket did not start")
         cmd = _build_docker_cmd(candidate_root, checker_dir, host_io, ns.runtime_pin_manifest_b64, ns.tests)
         print("F02_SANDBOX_POLICY network=none rootfs=ro caps=none no_new_privs=true seccomp=explicit pids=1 candidate=ro checker=ro image=digest-pinned")
-        try:
-            result = subprocess.run(cmd, check=False)
-        finally:
-            stop.set(); thread.join(timeout=2)
+        try: result = subprocess.run(cmd, check=False)
+        finally: stop.set(); thread.join(timeout=2)
         if helper_errors: raise RuntimeError(helper_errors[0])
         return result.returncode
 
