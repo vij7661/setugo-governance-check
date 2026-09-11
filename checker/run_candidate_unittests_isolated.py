@@ -214,9 +214,6 @@ def _install_runtime_guard(
             )
 
         if event == "import" and args:
-            # Resolution is enforced by _CandidatePinFinder. This branch makes
-            # import activity explicit in the audit policy and protects direct
-            # import machinery that still produces an import audit event.
             filename = args[1] if len(args) > 1 and isinstance(args[1], str) else None
             relpath = _origin_relpath(candidate_root, filename)
             if relpath is not None and relpath not in allowed:
@@ -225,7 +222,7 @@ def _install_runtime_guard(
                 )
             return
 
-        if event == "compile" and _stack_contains_candidate(candidate_root, 2):
+        if event == "compile" and _immediate_caller_is_candidate(candidate_root):
             raise RuntimeError("runtime guard rejected candidate-originated dynamic compilation")
 
         if event != "exec" or not args:
@@ -241,8 +238,6 @@ def _install_runtime_guard(
                 raise RuntimeError(
                     f"runtime guard rejected execution of unpinned candidate file: {relpath}"
                 )
-            # Normal module execution is invoked by import machinery. A direct
-            # candidate executor using a spoofed pinned filename is rejected.
             if _immediate_caller_is_candidate(candidate_root):
                 raise RuntimeError(
                     "runtime guard rejected direct dynamic code execution from candidate checkout"
