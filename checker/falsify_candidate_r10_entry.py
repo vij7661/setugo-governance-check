@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """R11-hardened external-checker entry point for the R10 qualification path.
 
-Qualification test execution is routed through a checker-owned out-of-process
-sandbox. Candidate code has no network; the host launcher may use the existing
-governance token only for the frozen governance-root proxy contract.
-Authority effect: NONE_EVIDENCE_ONLY.
+Standalone R10 regression execution retains the prior checker-owned isolated
+runner. RELEASE callers must explicitly set REQUIRE_EXTERNAL_SANDBOX and supply
+an exact non-empty execution manifest; only that path may enter the external
+Docker sandbox. Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update({
 
 QUALIFICATION_TEST_FILES = frozenset(r9.EXPECTED_QUALIFICATION_TEST_BLOBS)
 RUNTIME_PINNED_BLOBS: dict[str, str] = {}
+REQUIRE_EXTERNAL_SANDBOX = False
 
 STDLIB_NAMES = frozenset(getattr(sys, "stdlib_module_names", ()))
 if not STDLIB_NAMES:
@@ -72,6 +73,19 @@ def _manifest_b64() -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
+def _isolated_nonrelease_run(runtime: Path, explicit_test_args: list[str]) -> None:
+    runner = Path(__file__).resolve().with_name("run_candidate_unittests_isolated.py")
+    if not runner.is_file():
+        raise AssertionError("checker-owned isolated qualification runner is missing")
+    runner_cmd = [sys.executable, "-I", str(runner), str(runtime), *explicit_test_args]
+    subprocess.run(
+        runner_cmd,
+        cwd=checker.CHECKER_ROOT,
+        env={"PATH": str(Path(sys.executable).resolve().parent) + ":/usr/local/bin:/usr/bin:/bin"},
+        check=True,
+    )
+
+
 def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
     if cwd is None:
         return _original_run(cmd, cwd=cwd)
@@ -90,7 +104,11 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
 
     if explicit_test_args:
         if not RUNTIME_PINNED_BLOBS:
-            raise AssertionError("RELEASE sandbox execution manifest is empty")
+            if REQUIRE_EXTERNAL_SANDBOX:
+                raise AssertionError("RELEASE sandbox execution manifest is empty")
+            _isolated_nonrelease_run(runtime, explicit_test_args)
+            return
+
         launcher = Path(__file__).resolve().with_name("run_candidate_unittests_sandboxed_v2.py")
         if not launcher.is_file():
             raise AssertionError("checker-owned RELEASE sandbox/root-proxy launcher is missing")
