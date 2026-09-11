@@ -3,7 +3,10 @@
 
 Qualification test execution is routed through a checker-owned out-of-process
 sandbox. Candidate code has no network; the host launcher may use the existing
-governance token only for the frozen governance-root proxy contract.
+governance token only for the frozen governance-root proxy contract. The generic
+R10 path owns an explicit exact-blob execution manifest for its frozen TESTING
+candidate; RELEASE may replace this map with its own stricter exact-candidate
+manifest before execution.
 Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
@@ -28,7 +31,30 @@ r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update({
 })
 
 QUALIFICATION_TEST_FILES = frozenset(r9.EXPECTED_QUALIFICATION_TEST_BLOBS)
-RUNTIME_PINNED_BLOBS: dict[str, str] = {}
+
+# Frozen TESTING-candidate execution closure for the generic R10 regression.
+# This is checker-owned exact evidence, not discovered dynamically from the
+# candidate checkout. RELEASE replaces RUNTIME_PINNED_BLOBS with its own exact
+# candidate manifest in falsify_candidate_release_current.py.
+R10_RUNTIME_BLOBS = {
+    "governance-runtime/qualification_boundary_policy_v4.py": "019b89f32deba5a7bc93274ff41ad7e61a1aaad3",
+    "governance-runtime/external_governance_root.py": "c83b4aa9f1253f2cbd5a26b6857af8ded8bbc808",
+    "governance-runtime/manual_authority_verifier.py": "5d955a9cb74b97853d15bcf64662e2774ad71693",
+    "governance-runtime/qualification_boundary_policy.py": "8aac9f913df76f3d8d7760ab2989610a47da14bf",
+    "governance-runtime/phase_policy.py": "219d406d0335a318d91c8c940b19b8a39ad63a03",
+    "governance-runtime/review_protocol.py": "1bf92a5775a780f0f32d166fb6c6a0c522bbf490",
+    "governance-runtime/platform_candidate_review.py": "b6a3f8be0c2a59993e207fb5b6a75ecbd01e9f8b",
+    "governance-runtime/build_portable_review_packet.py": "7fd7fb621e8a1884eb34fd3e2d07db3f94242b58",
+    "governance-runtime/verify_external_trust_root_control.py": "98b48d5f8133f527c9490a4d02b477a56a2ae997",
+}
+for _filename, _blob in r9.EXPECTED_QUALIFICATION_TEST_BLOBS.items():
+    _relpath = f"governance-runtime/{_filename}"
+    _existing = R10_RUNTIME_BLOBS.get(_relpath)
+    if _existing is not None and _existing != _blob:
+        raise RuntimeError(f"conflicting R10 execution pin for {_relpath}: {_existing} != {_blob}")
+    R10_RUNTIME_BLOBS[_relpath] = _blob
+
+RUNTIME_PINNED_BLOBS: dict[str, str] = dict(R10_RUNTIME_BLOBS)
 
 STDLIB_NAMES = frozenset(getattr(sys, "stdlib_module_names", ()))
 if not STDLIB_NAMES:
