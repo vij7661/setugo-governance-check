@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 import threading
 
-SANDBOX_IMAGE = "python:3.12-bookworm"
+SANDBOX_IMAGE = "python@sha256:581429e3df12d76e6af4be5ab7d0e7fc2013eb57dc23d2de691411c8efdbb970"
 CONTAINER_CANDIDATE = Path("/candidate")
 CONTAINER_CHECKER = Path("/checker")
 CONTAINER_IO = Path("/sandbox-io")
@@ -190,6 +190,7 @@ def _build_docker_cmd(candidate_root: Path, checker_dir: Path, host_io: Path, ma
         "--pids-limit", "1",
         "--memory", "512m",
         "--cpus", "1.0",
+        "--user", f"{os.getuid()}:{os.getgid()}",
         "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m",
         "-e", "PYTHONDONTWRITEBYTECODE=1",
         "-e", "TMPDIR=/sandbox-io",
@@ -237,7 +238,7 @@ def main() -> int:
             stop.set(); thread.join(timeout=1)
             raise RuntimeError(helper_errors[0] if helper_errors else "crypto helper socket did not start")
         cmd = _build_docker_cmd(candidate_root, checker_dir, host_io, ns.runtime_pin_manifest_b64, ns.tests)
-        print("F02_SANDBOX_POLICY network=none rootfs=ro caps=none no_new_privs=true pids=1 candidate=ro checker=ro")
+        print("F02_SANDBOX_POLICY network=none rootfs=ro caps=none no_new_privs=true pids=1 candidate=ro checker=ro image=digest-pinned")
         try:
             result = subprocess.run(cmd, check=False)
         finally:
