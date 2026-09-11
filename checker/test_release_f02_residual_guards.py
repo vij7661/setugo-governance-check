@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import marshal
 from pathlib import Path
 import subprocess
 import sys
@@ -55,32 +56,29 @@ class ReleaseF02ResidualGuardTests(unittest.TestCase):
             check=False,
         )
 
+    def _assert_rejected(self, runtime_files: dict[str, str], expected: str):
+        td, repo, runtime = self._repo(runtime_files)
+        try:
+            result = self._run(repo, runtime, "test_entry.py")
+            self.assertNotEqual(0, result.returncode, result.stdout)
+            self.assertIn(expected, result.stdout)
+        finally:
+            td.cleanup()
+
     def test_direct_posixsubprocess_fork_exec_fails_closed(self):
-        td, repo, runtime = self._repo({
+        self._assert_rejected({
             "pinned.py": "import _posixsubprocess\ndef execute(): _posixsubprocess.fork_exec()\n",
             "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
-        })
-        try:
-            result = self._run(repo, runtime, "test_entry.py")
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("direct low-level process execution: fork_exec", result.stdout)
-        finally:
-            td.cleanup()
+        }, "direct low-level process execution: fork_exec")
 
     def test_direct_subprocess_private_fork_exec_fails_closed(self):
-        td, repo, runtime = self._repo({
+        self._assert_rejected({
             "pinned.py": "import subprocess\ndef execute(): subprocess._fork_exec()\n",
             "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
-        })
-        try:
-            result = self._run(repo, runtime, "test_entry.py")
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("direct low-level process execution: fork_exec", result.stdout)
-        finally:
-            td.cleanup()
+        }, "direct low-level process execution: fork_exec")
 
     def test_main_module_exposes_no_original_fork_exec_capability(self):
-        td, repo, runtime = self._repo({
+        self._assert_rejected({
             "pinned.py": (
                 "import __main__, subprocess, _posixsubprocess\n"
                 "def execute():\n"
@@ -89,18 +87,12 @@ class ReleaseF02ResidualGuardTests(unittest.TestCase):
                 "    subprocess._fork_exec()\n"
             ),
             "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
-        })
-        try:
-            result = self._run(repo, runtime, "test_entry.py")
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("direct low-level process execution: fork_exec", result.stdout)
-        finally:
-            td.cleanup()
+        }, "direct low-level process execution: fork_exec")
 
     def test_external_runpy_rejected_regardless_of_extension(self):
         for filename in ("setugo-f02-evil.txt", "setugo-f02-evil", "setugo-f02-evil.pyw", "setugo-f02-evil.PY"):
             with self.subTest(filename=filename):
-                td, repo, runtime = self._repo({
+                self._assert_rejected({
                     "pinned.py": (
                         "import runpy, tempfile\nfrom pathlib import Path\n"
                         f"FILENAME={filename!r}\n"
@@ -111,16 +103,10 @@ class ReleaseF02ResidualGuardTests(unittest.TestCase):
                         "    finally: path.unlink(missing_ok=True)\n"
                     ),
                     "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
-                })
-                try:
-                    result = self._run(repo, runtime, "test_entry.py")
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn("untrusted external file", result.stdout)
-                finally:
-                    td.cleanup()
+                }, "untrusted external file")
 
     def test_sourcefileloader_temp_python_fails_closed(self):
-        td, repo, runtime = self._repo({
+        self._assert_rejected({
             "pinned.py": (
                 "import importlib.machinery, tempfile\nfrom pathlib import Path\n"
                 "def execute():\n"
@@ -132,25 +118,76 @@ class ReleaseF02ResidualGuardTests(unittest.TestCase):
                 "    finally: path.unlink(missing_ok=True)\n"
             ),
             "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
-        })
-        try:
-            result = self._run(repo, runtime, "test_entry.py")
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("untrusted external file", result.stdout)
-        finally:
-            td.cleanup()
+        }, "untrusted external file")
 
     def test_arbitrary_subprocess_is_denied_after_crypto_helper_start(self):
-        td, repo, runtime = self._repo({
+        self._assert_rejected({
             "pinned.py": "import subprocess, sys\ndef execute(): subprocess.run([sys.executable, '-c', 'print(1)'])\n",
             "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
-        })
-        try:
-            result = self._run(repo, runtime, "test_entry.py")
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("candidate-originated subprocess execution", result.stdout)
-        finally:
-            td.cleanup()
+        }, "candidate-originated subprocess execution")
+
+    def test_marshal_loaded_precompiled_code_fails_closed(self):
+        payload = marshal.dumps(compile("VALUE = 23\n", "/tmp/setugo-f02-precompiled.py", "exec"))
+        self._assert_rejected({
+            "pinned.py": (
+                "import marshal, types\n"
+                f"PAYLOAD={payload!r}\n"
+                "def execute():\n"
+                "    code=marshal.loads(PAYLOAD)\n"
+                "    return types.FunctionType(code, globals())()\n"
+            ),
+            "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
+        }, "untrusted Python frame")
+
+    def test_code_replace_constructed_code_fails_closed(self):
+        self._assert_rejected({
+            "pinned.py": (
+                "import types\n"
+                "def seed(): return 1\n"
+                "def execute():\n"
+                "    changed=seed.__code__.replace(co_consts=(None, 99))\n"
+                "    return types.FunctionType(changed, globals())()\n"
+            ),
+            "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
+        }, "unauthorized candidate code object")
+
+    def test_functiontype_rebound_globals_fails_closed(self):
+        self._assert_rejected({
+            "pinned.py": (
+                "import types\n"
+                "def invoke(): return TARGET()\n"
+                "def benign(): return 1\n"
+                "def execute():\n"
+                "    fake={'TARGET': benign, '__name__': __name__, '__file__': __file__}\n"
+                "    return types.FunctionType(invoke.__code__, fake)()\n"
+            ),
+            "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
+        }, "candidate code with rebound globals")
+
+    def test_trace_hook_mutation_fails_closed(self):
+        self._assert_rejected({
+            "pinned.py": "import sys\ndef execute(): sys.settrace(None)\n",
+            "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
+        }, "trace-hook mutation")
+
+    def test_subinterpreter_creation_fails_closed_when_available(self):
+        self._assert_rejected({
+            "pinned.py": (
+                "def execute():\n"
+                "    try:\n"
+                "        import _xxsubinterpreters as sub\n"
+                "    except ImportError:\n"
+                "        import _interpreters as sub\n"
+                "    sub.create()\n"
+            ),
+            "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
+        }, "subinterpreter capability")
+
+    def test_direct_low_level_ctypes_dlopen_fails_closed(self):
+        self._assert_rejected({
+            "pinned.py": "import _ctypes\ndef execute(): _ctypes.dlopen(None, 0)\n",
+            "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
+        }, "runtime guard rejected candidate-originated")
 
     def test_existing_openssl_sandbox_still_allows_exact_der_shape(self):
         td, repo, runtime = self._repo({
