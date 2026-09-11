@@ -91,7 +91,7 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
         raise AssertionError("candidate-controlled pytest/plugin collection is not an allowed qualification path")
 
     if explicit_test_args:
-        bootstrap = Path(__file__).resolve().with_name("run_candidate_unittests_isolated.py")
+        bootstrap = Path(__file__).resolve().with_name("run_candidate_unittests_isolated_v2.py")
         if not bootstrap.is_file():
             raise AssertionError("checker-owned isolated qualification runner is missing")
         runner_cmd = [sys.executable, "-I", str(bootstrap), str(runtime)]
