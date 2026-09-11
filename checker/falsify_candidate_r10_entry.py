@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """R11-hardened external-checker entry point for the R10 qualification path.
 
-Preserves R10 test-blob closure and removes candidate test-runner/import-precedence
-bypasses exposed by the independent R10 review.
+Qualification test execution is routed through a checker-owned out-of-process
+sandbox. Candidate code does not execute directly in the checker interpreter.
 Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
@@ -19,7 +19,6 @@ checker = r9.checker
 _original_run = checker.run
 _original_dependency_closure = checker.verify_authority_critical_dependency_closure
 
-# Bridge-imported modules that contribute to qualification are externally pinned.
 r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update({
     "test_qualification_boundary_policy.py": "7977f8225be8001772531516421091a681295478",
     "test_manual_review_authority_spoofing_regression.py": "7c33e04883931a17bc50cfccba00363a8af461c0",
@@ -27,8 +26,6 @@ r9.EXPECTED_QUALIFICATION_TEST_BLOBS.update({
 })
 
 QUALIFICATION_TEST_FILES = frozenset(r9.EXPECTED_QUALIFICATION_TEST_BLOBS)
-# RELEASE wrappers may set this checker-owned exact map. The isolated runner then
-# enforces it against candidate-local imports actually observed during execution.
 RUNTIME_PINNED_BLOBS: dict[str, str] = {}
 
 STDLIB_NAMES = frozenset(getattr(sys, "stdlib_module_names", ()))
@@ -78,8 +75,7 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
         return _original_run(cmd, cwd=cwd)
 
     runtime = Path(cwd).resolve()
-    is_candidate_runtime = runtime.name == "governance-runtime"
-    if not is_candidate_runtime:
+    if runtime.name != "governance-runtime":
         return _original_run(cmd, cwd=cwd)
 
     explicit_test_args = [str(arg) for arg in cmd if str(arg).endswith(".py") and str(arg).startswith("test_")]
@@ -91,13 +87,19 @@ def _isolating_run(cmd: list[str], cwd: Path | None = None) -> None:
         raise AssertionError("candidate-controlled pytest/plugin collection is not an allowed qualification path")
 
     if explicit_test_args:
-        bootstrap = Path(__file__).resolve().with_name("run_candidate_unittests_isolated_v2.py")
-        if not bootstrap.is_file():
-            raise AssertionError("checker-owned isolated qualification runner is missing")
-        runner_cmd = [sys.executable, "-I", str(bootstrap), str(runtime)]
-        if RUNTIME_PINNED_BLOBS:
-            runner_cmd.extend(["--runtime-pin-manifest-b64", _manifest_b64()])
-        runner_cmd.extend(explicit_test_args)
+        if not RUNTIME_PINNED_BLOBS:
+            raise AssertionError("RELEASE sandbox execution manifest is empty")
+        launcher = Path(__file__).resolve().with_name("run_candidate_unittests_sandboxed.py")
+        if not launcher.is_file():
+            raise AssertionError("checker-owned RELEASE sandbox launcher is missing")
+        runner_cmd = [
+            sys.executable,
+            str(launcher),
+            str(runtime),
+            "--runtime-pin-manifest-b64",
+            _manifest_b64(),
+            *explicit_test_args,
+        ]
         subprocess.run(
             runner_cmd,
             cwd=checker.CHECKER_ROOT,
