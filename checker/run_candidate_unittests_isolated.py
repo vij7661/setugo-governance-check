@@ -251,7 +251,12 @@ def _install_runtime_guard(
                 )
             return
 
-        if filename.startswith("<") and _stack_contains_candidate(candidate_root, 2):
+        # Attribute synthetic eval/exec only when candidate code is the direct
+        # caller. Trusted stdlib helpers may legitimately use eval/exec while a
+        # candidate frame is lower in the stack (for example namedtuple inside
+        # runpy imports); whole-checkout real-file execution remains separately
+        # guarded below by origin and exact blob identity.
+        if filename.startswith("<") and _immediate_caller_is_candidate(candidate_root):
             raise RuntimeError(
                 "runtime guard rejected synthetic dynamic code execution from candidate checkout"
             )
