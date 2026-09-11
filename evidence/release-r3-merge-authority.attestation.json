@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "candidate_sha": "4200397f21e12f900c309ee1bc66fa8424135f11",
+  "authority_class": "HUMAN_RELEASE_AUTHORITY",
+  "decision_scope": "TERMINAL_ACTION:RELEASE:MERGE_RELEASE_CANDIDATE",
+  "evidence_ref": "sha256:2fa4c0dd9b583c674493f76c7df3badd3212e3dfd57512d2d293e2e181b90437",
+  "source_kind": "MANUAL_GOVERNANCE_ATTESTATION",
+  "qualification_policy_id": "QUALIFICATION_BOUNDARY_OWNERSHIP",
+  "qualification_policy_version": 7,
+  "qualification_policy_hash": "3a1936d3e8956b2521908189139ee73868c48f29be13fcacea84f839ca6b2258",
+  "trust_root_id": "SETUGO_RELEASE_GOVERNANCE_ED25519_V1"
+}
