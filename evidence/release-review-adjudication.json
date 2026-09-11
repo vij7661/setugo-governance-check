@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "candidate_repository": "vij7661/setugo-ai-development-framework",
+  "candidate_sha": "4200397f21e12f900c309ee1bc66fa8424135f11",
+  "pull_request": 37,
+  "review_type": "INDEPENDENT_RELEASE_ADJUDICATION",
+  "authority_class": "INDEPENDENT_GOVERNANCE_ADJUDICATOR",
+  "decision_scope": "REVIEW_FINDING_ADJUDICATION",
+  "disposition": "PASS",
+  "source_kind": "MANUAL_INDEPENDENT_RELEASE_REVIEW",
+  "raw_review_ref": "https://raw.githubusercontent.com/vij7661/setugo-governance-check/c789160a93b5bf5aff49b454069d1e1e4852441c/evidence/manual-reviews/release-v16-independent-review-pass.md",
+  "raw_review_sha256": "f9f15257137751701bd5cb9ebb2c935f9e124731554a6bcf4c5a0f0f4658210c",
+  "reviewed_checker_sha": "77ad64c177b1eed516b9e58699c1f5128ba058a6",
+  "qualification_policy_id": "QUALIFICATION_BOUNDARY_OWNERSHIP",
+  "qualification_policy_version": 7,
+  "qualification_policy_hash": "3a1936d3e8956b2521908189139ee73868c48f29be13fcacea84f839ca6b2258",
+  "trust_root_id": "SETUGO_REVIEW_ADJUDICATION_ED25519_V2"
+}
