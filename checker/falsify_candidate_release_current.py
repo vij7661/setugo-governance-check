@@ -26,10 +26,13 @@ release.RELEASE_REQUIRED_CHECKS = frozenset(
 )
 runtime_closure.CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
 
+# RELEASE must never silently fall back to the non-release isolated runner.
+release.r10.REQUIRE_EXTERNAL_SANDBOX = True
+
 # Runtime execution must be authorized by an existing checker-owned exact pin.
-# The isolated runner now interprets manifest keys relative to the candidate
-# checkout root, not merely governance-runtime/. Build one candidate-root
-# execution manifest from all authoritative candidate-code pin sets.
+# The isolated runner interprets manifest keys relative to the candidate checkout
+# root. Build one candidate-root execution manifest from every authoritative
+# candidate-code pin set.
 _candidate_execution_pins: dict[str, str] = {}
 
 
@@ -48,11 +51,11 @@ for runtime_relpath, blob in runtime_closure.PINNED_RUNTIME_BLOBS.items():
 for relpath, blob in release.EXTRA_EXECUTION_BLOBS.items():
     _add_candidate_pin(relpath, blob)
 
-# The R10/R11 checker owns the exact qualification-test blob map. Tests are
-# executable candidate-local Python and may import one another, so they are
-# part of the whole-checkout execution authorization closure.
 for runtime_relpath, blob in release.r10.r9.EXPECTED_QUALIFICATION_TEST_BLOBS.items():
     _add_candidate_pin(f"governance-runtime/{runtime_relpath}", blob)
+
+if not _candidate_execution_pins:
+    raise RuntimeError("RELEASE candidate execution pin union is empty")
 
 release.r10.RUNTIME_PINNED_BLOBS = _candidate_execution_pins
 
