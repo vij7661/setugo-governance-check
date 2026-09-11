@@ -260,7 +260,9 @@ class ReleaseRuntimeExecutionGuardTests(unittest.TestCase):
             )
             result = self._run(runtime, manifest, "test_entry.py")
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("runtime guard rejected synthetic dynamic code execution", result.stdout)
+            # exec(str) emits a compile audit event first. The earliest direct
+            # candidate capability denial is therefore dynamic compilation.
+            self.assertIn("candidate-originated dynamic compilation", result.stdout)
         finally:
             td.cleanup()
 
