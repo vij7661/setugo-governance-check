@@ -56,10 +56,7 @@ def _helper_request(payload: dict[str, object]) -> dict[str, object]:
         sock.connect(str(_HELPER_SOCKET))
         sock.sendall(json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n")
         raw = _recv_line(sock)
-    try:
-        response = json.loads(raw.decode("utf-8"))
-    except Exception as exc:
-        raise RuntimeError("sandbox crypto helper returned malformed response") from exc
+    response = json.loads(raw.decode("utf-8"))
     if not isinstance(response, dict):
         raise RuntimeError("sandbox crypto helper returned non-object response")
     return response
@@ -89,10 +86,12 @@ def _install_process_denials() -> None:
 
 
 def _install_ctypes_denials() -> None:
-    v2._install_low_level_ctypes_guard()
     try:
         import ctypes
     except ImportError:
+        ctypes = None
+    v2._install_low_level_ctypes_guard()
+    if ctypes is None:
         return
     for name in ("_dlopen", "CDLL", "PyDLL", "OleDLL", "WinDLL", "LibraryLoader", "pythonapi", "pydll"):
         if hasattr(ctypes, name):
@@ -105,7 +104,6 @@ def _install_ctypes_denials() -> None:
 def _install_runtime_guard_v3(candidate_root: Path, runtime: Path, selected: list[str], manifest: dict[str, str]) -> None:
     if not manifest:
         raise RuntimeError("host-verified execution manifest is empty")
-
     original_git_blob_sha = base._git_blob_sha
     def verified_blob_lookup(root: Path, relpath: str) -> str:
         if root.resolve() != candidate_root.resolve():
@@ -114,13 +112,11 @@ def _install_runtime_guard_v3(candidate_root: Path, runtime: Path, selected: lis
             return manifest[Path(relpath).as_posix()]
         except KeyError as exc:
             raise RuntimeError(f"sandbox manifest missing authorized path: {relpath}") from exc
-
     base._git_blob_sha = verified_blob_lookup
     try:
         _original_install_runtime_guard(candidate_root, runtime, selected, manifest)
     finally:
         base._git_blob_sha = original_git_blob_sha
-
     _install_process_denials()
     _install_ctypes_denials()
     v2._install_subinterpreter_guard()
