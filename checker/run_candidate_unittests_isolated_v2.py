@@ -176,7 +176,7 @@ def _execution_capability_audit(candidate_root: Path):
     def audit(event, args):
         if event in direct_dynamic_events:
             immediate = getattr(base, "_immediate_caller_is_candidate", None)
-            if immediate is not None and immediate(candidate_root, 2):
+            if immediate is not None and immediate(candidate_root):
                 raise RuntimeError(
                     f"runtime guard rejected direct dynamic code capability: {event}"
                 )
