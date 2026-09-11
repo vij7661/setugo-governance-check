@@ -41,10 +41,8 @@ class ReleaseF02ResidualGuardTests(unittest.TestCase):
             f"governance-runtime/{name}": self._blob(repo, f"governance-runtime/{name}")
             for name in tests
         }
-        for name in ("pinned.py",):
-            path = runtime / name
-            if path.exists():
-                manifest[f"governance-runtime/{name}"] = self._blob(repo, f"governance-runtime/{name}")
+        if (runtime / "pinned.py").exists():
+            manifest["governance-runtime/pinned.py"] = self._blob(repo, "governance-runtime/pinned.py")
         encoded = base64.b64encode(
             json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).decode("ascii")
@@ -81,31 +79,52 @@ class ReleaseF02ResidualGuardTests(unittest.TestCase):
         finally:
             td.cleanup()
 
-    def test_runpy_temp_python_fails_closed(self):
+    def test_main_module_exposes_no_original_fork_exec_capability(self):
         td, repo, runtime = self._repo({
             "pinned.py": (
-                "import runpy, tempfile\nfrom pathlib import Path\n"
+                "import __main__, subprocess, _posixsubprocess\n"
                 "def execute():\n"
-                "    path=Path(tempfile.gettempdir())/'setugo-f02-runpy-temp.py'\n"
-                "    path.write_text('VALUE=17\\n', encoding='utf-8')\n"
-                "    try: return runpy.run_path(str(path))\n"
-                "    finally: path.unlink(missing_ok=True)\n"
+                "    assert not hasattr(__main__, '_ORIGINAL_FORK_EXEC')\n"
+                "    assert not hasattr(__main__, '_FORK_EXEC_STATE')\n"
+                "    subprocess._fork_exec()\n"
             ),
             "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
         })
         try:
             result = self._run(repo, runtime, "test_entry.py")
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("untrusted external Python file", result.stdout)
+            self.assertIn("direct low-level process execution: fork_exec", result.stdout)
         finally:
             td.cleanup()
+
+    def test_external_runpy_rejected_regardless_of_extension(self):
+        for filename in ("setugo-f02-evil.txt", "setugo-f02-evil", "setugo-f02-evil.pyw", "setugo-f02-evil.PY"):
+            with self.subTest(filename=filename):
+                td, repo, runtime = self._repo({
+                    "pinned.py": (
+                        "import runpy, tempfile\nfrom pathlib import Path\n"
+                        f"FILENAME={filename!r}\n"
+                        "def execute():\n"
+                        "    path=Path(tempfile.gettempdir())/FILENAME\n"
+                        "    path.write_text('VALUE=17\\n', encoding='utf-8')\n"
+                        "    try: return runpy.run_path(str(path))\n"
+                        "    finally: path.unlink(missing_ok=True)\n"
+                    ),
+                    "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
+                })
+                try:
+                    result = self._run(repo, runtime, "test_entry.py")
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("untrusted external file", result.stdout)
+                finally:
+                    td.cleanup()
 
     def test_sourcefileloader_temp_python_fails_closed(self):
         td, repo, runtime = self._repo({
             "pinned.py": (
                 "import importlib.machinery, tempfile\nfrom pathlib import Path\n"
                 "def execute():\n"
-                "    path=Path(tempfile.gettempdir())/'setugo-f02-loader-temp.py'\n"
+                "    path=Path(tempfile.gettempdir())/'setugo-f02-loader-temp.txt'\n"
                 "    path.write_text('VALUE=19\\n', encoding='utf-8')\n"
                 "    try:\n"
                 "        loader=importlib.machinery.SourceFileLoader('setugo_f02_external', str(path))\n"
@@ -117,7 +136,19 @@ class ReleaseF02ResidualGuardTests(unittest.TestCase):
         try:
             result = self._run(repo, runtime, "test_entry.py")
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("untrusted external Python file", result.stdout)
+            self.assertIn("untrusted external file", result.stdout)
+        finally:
+            td.cleanup()
+
+    def test_arbitrary_subprocess_is_denied_after_crypto_helper_start(self):
+        td, repo, runtime = self._repo({
+            "pinned.py": "import subprocess, sys\ndef execute(): subprocess.run([sys.executable, '-c', 'print(1)'])\n",
+            "test_entry.py": "import unittest\nimport pinned\nclass T(unittest.TestCase):\n    def test_x(self): pinned.execute()\n",
+        })
+        try:
+            result = self._run(repo, runtime, "test_entry.py")
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("candidate-originated subprocess execution", result.stdout)
         finally:
             td.cleanup()
 
