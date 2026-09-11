@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Host-side launcher for F-02 RELEASE qualification sandbox.
 
-Runs the exact candidate qualification corpus in a Docker sandbox with no
-network, read-only root/candidate/checker filesystems, all capabilities dropped,
-no-new-privileges, and a one-PID candidate container. Exact frozen OpenSSL
-operations are delegated to a checker-owned host helper over AF_UNIX.
+Runs exact candidate qualification in a Docker sandbox with no network,
+read-only root/candidate/checker filesystems, all capabilities dropped,
+no-new-privileges, and a one-PID candidate container. Exact manifest Git blobs
+are verified on the trusted host before launch. Frozen OpenSSL operations are
+delegated to a checker-owned host helper over AF_UNIX.
 
 Authority effect: NONE_EVIDENCE_ONLY.
 """
@@ -25,6 +26,39 @@ SANDBOX_IMAGE = "python:3.12-bookworm"
 CONTAINER_CANDIDATE = Path("/candidate")
 CONTAINER_CHECKER = Path("/checker")
 CONTAINER_IO = Path("/sandbox-io")
+
+
+def _decode_manifest(value: str) -> dict[str, str]:
+    try:
+        payload = json.loads(base64.b64decode(value, validate=True).decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("sandbox manifest is malformed") from exc
+    if not isinstance(payload, dict) or not payload:
+        raise RuntimeError("sandbox manifest is empty")
+    result: dict[str, str] = {}
+    for relpath, blob in payload.items():
+        if not isinstance(relpath, str) or not relpath or relpath.startswith("/") or ".." in Path(relpath).parts:
+            raise RuntimeError("sandbox manifest contains invalid path")
+        if not isinstance(blob, str) or len(blob) != 40 or any(ch not in "0123456789abcdef" for ch in blob):
+            raise RuntimeError("sandbox manifest contains invalid blob SHA")
+        result[Path(relpath).as_posix()] = blob
+    return result
+
+
+def _validate_manifest(candidate_root: Path, manifest: dict[str, str]) -> None:
+    for relpath, expected in manifest.items():
+        result = subprocess.run(
+            ["git", "ls-tree", "HEAD", "--", relpath],
+            cwd=candidate_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        parts = result.stdout.strip().split()
+        if len(parts) < 3 or parts[2] != expected:
+            actual = parts[2] if len(parts) >= 3 else "MISSING"
+            raise RuntimeError(f"sandbox manifest blob mismatch for {relpath}: {actual} != {expected}")
 
 
 def _recv_line(conn: socket.socket) -> bytes:
@@ -159,9 +193,6 @@ def _build_docker_cmd(candidate_root: Path, checker_dir: Path, host_io: Path, ma
         "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m",
         "-e", "PYTHONDONTWRITEBYTECODE=1",
         "-e", "TMPDIR=/sandbox-io",
-        "-e", "GIT_CONFIG_COUNT=1",
-        "-e", "GIT_CONFIG_KEY_0=safe.directory",
-        "-e", "GIT_CONFIG_VALUE_0=/candidate",
         "-v", f"{candidate_root}:{CONTAINER_CANDIDATE}:ro",
         "-v", f"{checker_dir}:{CONTAINER_CHECKER}:ro",
         "-v", f"{host_io}:{CONTAINER_IO}:rw",
@@ -187,6 +218,8 @@ def main() -> int:
     checker_dir = Path(__file__).resolve().parent
     if runtime.name != "governance-runtime" or not (candidate_root / ".git").exists():
         raise RuntimeError("sandbox candidate checkout shape invalid")
+    manifest = _decode_manifest(ns.runtime_pin_manifest_b64)
+    _validate_manifest(candidate_root, manifest)
 
     with tempfile.TemporaryDirectory(prefix="setugo-release-sandbox-") as td:
         host_io = Path(td).resolve()
@@ -203,7 +236,6 @@ def main() -> int:
         if helper_errors or not socket_path.exists():
             stop.set(); thread.join(timeout=1)
             raise RuntimeError(helper_errors[0] if helper_errors else "crypto helper socket did not start")
-
         cmd = _build_docker_cmd(candidate_root, checker_dir, host_io, ns.runtime_pin_manifest_b64, ns.tests)
         print("F02_SANDBOX_POLICY network=none rootfs=ro caps=none no_new_privs=true pids=1 candidate=ro checker=ro")
         try:
