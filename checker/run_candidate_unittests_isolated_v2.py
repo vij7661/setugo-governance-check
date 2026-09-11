@@ -12,13 +12,20 @@ Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
 import sysconfig
 import threading
 
-import run_candidate_unittests_isolated as base
+_BASE_PATH = Path(__file__).resolve().with_name("run_candidate_unittests_isolated.py")
+_BASE_SPEC = importlib.util.spec_from_file_location("setugo_isolated_runner_base", _BASE_PATH)
+if _BASE_SPEC is None or _BASE_SPEC.loader is None:
+    raise RuntimeError("unable to load checker-owned isolated runner base")
+base = importlib.util.module_from_spec(_BASE_SPEC)
+sys.modules[_BASE_SPEC.name] = base
+_BASE_SPEC.loader.exec_module(base)
 
 
 _TRUSTED_PYTHON_ROOTS = tuple(
