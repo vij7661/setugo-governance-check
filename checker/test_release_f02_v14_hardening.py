@@ -64,7 +64,10 @@ class ReleaseF02V14HardeningTests(unittest.TestCase):
         profile = Path(seccomp_args[0].split("=", 1)[1])
         payload = json.loads(profile.read_text(encoding="utf-8"))
         denied = {name for rule in payload["syscalls"] if rule["action"] == "SCMP_ACT_ERRNO" for name in rule["names"]}
-        for name in ("clone", "clone3", "fork", "vfork", "execveat", "unshare", "setns", "ptrace", "bpf", "mount"):
+        for name in (
+            "clone", "clone3", "fork", "vfork", "execve", "execveat",
+            "unshare", "setns", "ptrace", "bpf", "mount",
+        ):
             self.assertIn(name, denied)
 
     def test_root_proxy_rejects_redirected_final_url(self):
