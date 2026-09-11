@@ -25,6 +25,10 @@ class ReleaseCurrentBindingTests(unittest.TestCase):
             EXPECTED_RELEASE_ROOT_BLOB,
         )
 
+    def test_release_path_requires_external_sandbox(self):
+        self.assertTrue(current_release.release.r10.REQUIRE_EXTERNAL_SANDBOX)
+        self.assertTrue(current_release.release.r10.RUNTIME_PINNED_BLOBS)
+
     def test_runtime_execution_manifest_is_derived_from_all_authoritative_candidate_code_pin_sets(self):
         execution_pins = current_release.release.r10.RUNTIME_PINNED_BLOBS
         for relpath, blob in current_release.runtime_closure.PINNED_RUNTIME_BLOBS.items():

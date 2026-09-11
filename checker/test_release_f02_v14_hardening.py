@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ from unittest import mock
 
 import run_candidate_unittests_sandboxed as sandbox
 import run_candidate_unittests_sandboxed_v2 as proxy
+import run_candidate_unittests_isolated_v3 as child
 
 
 class ReleaseF02V14HardeningTests(unittest.TestCase):
@@ -54,7 +56,7 @@ class ReleaseF02V14HardeningTests(unittest.TestCase):
             self.assertIsNone(sandbox._prepare_openssl_argv(argv, root, Path("/usr/bin/openssl")))
             outside.unlink(missing_ok=True)
 
-    def test_seccomp_profile_is_explicitly_bound_into_docker_command(self):
+    def test_seccomp_is_two_stage_and_explicit(self):
         checker_dir = Path(__file__).resolve().parent
         cmd = sandbox._build_docker_cmd(
             Path("/host/candidate"), checker_dir, Path("/host/io"), "abc", ["test_entry.py"]
@@ -64,8 +66,23 @@ class ReleaseF02V14HardeningTests(unittest.TestCase):
         profile = Path(seccomp_args[0].split("=", 1)[1])
         payload = json.loads(profile.read_text(encoding="utf-8"))
         denied = {name for rule in payload["syscalls"] if rule["action"] == "SCMP_ACT_ERRNO" for name in rule["names"]}
-        for name in ("clone", "clone3", "fork", "vfork", "execveat", "unshare", "setns", "ptrace", "bpf", "mount"):
+        # Pre-start Docker seccomp must allow the Python entrypoint exec itself,
+        # but deny process/namespace escape primitives before bootstrap.
+        for name in ("clone", "clone3", "fork", "vfork", "unshare", "setns", "ptrace", "bpf", "mount"):
             self.assertIn(name, denied)
+        self.assertNotIn("execve", denied)
+        self.assertNotIn("execveat", denied)
+
+        # The trusted sandbox child installs the irreversible exec deny filter
+        # after interpreter bootstrap and before candidate modules are imported.
+        source = inspect.getsource(child._install_kernel_exec_seccomp)
+        self.assertIn('b"execve"', source)
+        self.assertIn('b"execveat"', source)
+        guard_source = inspect.getsource(child._install_runtime_guard_v3)
+        self.assertLess(
+            guard_source.index("_install_kernel_exec_seccomp()"),
+            guard_source.index("_original_install_runtime_guard"),
+        )
 
     def test_root_proxy_rejects_redirected_final_url(self):
         url = next(iter(proxy.ALLOWED_ROOT_URLS))

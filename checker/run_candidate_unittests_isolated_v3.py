@@ -7,11 +7,19 @@ without spawning git. Exact frozen OpenSSL operations are proxied to the host
 helper over AF_UNIX. All direct process/native capabilities remain denied in
 process as defense in depth; the outer sandbox is the authority boundary.
 
+A second irreversible kernel seccomp filter is installed after the container
+interpreter starts but before any candidate module is imported. This runtime
+filter denies execve/execveat, which cannot be denied by Docker's pre-start
+seccomp profile without also preventing the Python entrypoint itself.
+
 Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
 import base64
+import ctypes
+import ctypes.util
+import errno
 import importlib.util
 import json
 import os
@@ -32,9 +40,58 @@ base = v2.base
 _HELPER_SOCKET: Path | None = None
 _original_install_runtime_guard = v2._original_install_runtime_guard
 
+_SCMP_ACT_ALLOW = 0x7FFF0000
+_SCMP_ACT_ERRNO = 0x00050000
+
 
 def _deny_capability(*args, **kwargs):
     raise RuntimeError("runtime guard rejected forbidden candidate execution capability")
+
+
+def _install_kernel_exec_seccomp() -> None:
+    """Irreversibly deny execve/execveat after interpreter bootstrap."""
+    library = ctypes.util.find_library("seccomp") or "libseccomp.so.2"
+    try:
+        seccomp = ctypes.CDLL(library, use_errno=True)
+    except OSError as exc:
+        raise RuntimeError("runtime seccomp library unavailable") from exc
+
+    seccomp.seccomp_init.argtypes = [ctypes.c_uint32]
+    seccomp.seccomp_init.restype = ctypes.c_void_p
+    seccomp.seccomp_rule_add.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint]
+    seccomp.seccomp_rule_add.restype = ctypes.c_int
+    seccomp.seccomp_syscall_resolve_name.argtypes = [ctypes.c_char_p]
+    seccomp.seccomp_syscall_resolve_name.restype = ctypes.c_int
+    seccomp.seccomp_load.argtypes = [ctypes.c_void_p]
+    seccomp.seccomp_load.restype = ctypes.c_int
+    seccomp.seccomp_release.argtypes = [ctypes.c_void_p]
+    seccomp.seccomp_release.restype = None
+
+    ctx = seccomp.seccomp_init(_SCMP_ACT_ALLOW)
+    if not ctx:
+        raise RuntimeError("runtime seccomp initialization failed")
+    try:
+        deny = _SCMP_ACT_ERRNO | errno.EPERM
+        for name in (b"execve", b"execveat"):
+            number = seccomp.seccomp_syscall_resolve_name(name)
+            if number < 0:
+                raise RuntimeError(f"runtime seccomp cannot resolve {name.decode()}")
+            if seccomp.seccomp_rule_add(ctx, deny, number, 0) != 0:
+                raise RuntimeError(f"runtime seccomp could not deny {name.decode()}")
+        if seccomp.seccomp_load(ctx) != 0:
+            raise RuntimeError("runtime seccomp load failed")
+    finally:
+        seccomp.seccomp_release(ctx)
+
+    # Safe proof that the kernel filter is active: absent the filter this path
+    # yields ENOENT; with the filter it must fail earlier with EPERM.
+    probe = "/__setugo_execve_probe_must_not_exist__"
+    try:
+        os.execve(probe, [probe], {})
+    except PermissionError:
+        print("F02_RUNTIME_SECCOMP execve=denied")
+    except FileNotFoundError as exc:
+        raise RuntimeError("runtime seccomp execve denial is not active") from exc
 
 
 def _recv_line(sock: socket.socket) -> bytes:
@@ -87,16 +144,16 @@ def _install_process_denials() -> None:
 
 def _install_ctypes_denials() -> None:
     try:
-        import ctypes
+        import ctypes as ctypes_module
     except ImportError:
-        ctypes = None
+        ctypes_module = None
     v2._install_low_level_ctypes_guard()
-    if ctypes is None:
+    if ctypes_module is None:
         return
     for name in ("_dlopen", "CDLL", "PyDLL", "OleDLL", "WinDLL", "LibraryLoader", "pythonapi", "pydll"):
-        if hasattr(ctypes, name):
+        if hasattr(ctypes_module, name):
             try:
-                setattr(ctypes, name, _deny_capability)
+                setattr(ctypes_module, name, _deny_capability)
             except (AttributeError, TypeError) as exc:
                 raise RuntimeError(f"runtime guard could not neutralize ctypes.{name}") from exc
 
@@ -104,6 +161,11 @@ def _install_ctypes_denials() -> None:
 def _install_runtime_guard_v3(candidate_root: Path, runtime: Path, selected: list[str], manifest: dict[str, str]) -> None:
     if not manifest:
         raise RuntimeError("host-verified execution manifest is empty")
+
+    # Kernel-level exec denial must be installed before candidate imports and
+    # before ctypes is neutralized by defense-in-depth patches.
+    _install_kernel_exec_seccomp()
+
     original_git_blob_sha = base._git_blob_sha
     def verified_blob_lookup(root: Path, relpath: str) -> str:
         if root.resolve() != candidate_root.resolve():

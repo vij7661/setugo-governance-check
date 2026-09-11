@@ -4,7 +4,7 @@
   "syscalls": [
     {
       "names": [
-        "clone", "clone3", "fork", "vfork", "execveat", "unshare", "setns",
+        "clone", "clone3", "fork", "vfork", "unshare", "setns",
         "ptrace", "bpf", "mount", "umount2", "pivot_root", "chroot",
         "kexec_load", "kexec_file_load", "init_module", "finit_module", "delete_module"
       ],

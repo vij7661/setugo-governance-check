@@ -70,6 +70,7 @@ class ReleaseF02ExternalSandboxTests(unittest.TestCase):
             ], cwd=Path(__file__).resolve().parent, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             self.assertEqual(0, result.returncode, result.stdout)
             self.assertIn('F02_SANDBOX_POLICY', result.stdout)
+            self.assertIn('F02_RUNTIME_SECCOMP execve=denied', result.stdout)
 
 
 if __name__ == '__main__':
