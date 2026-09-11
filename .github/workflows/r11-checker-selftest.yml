@@ -36,7 +36,8 @@ jobs:
             test_release_current_binding.py \
             test_release_runtime_import_closure.py \
             test_release_runtime_execution_guard.py \
-            test_release_runtime_capability_semantics.py
+            test_release_runtime_capability_semantics.py \
+            test_release_f02_residual_guards.py
 
       - name: Run hardened closure against exact frozen RELEASE candidate
         working-directory: checker
