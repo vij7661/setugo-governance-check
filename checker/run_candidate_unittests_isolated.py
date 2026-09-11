@@ -4,8 +4,9 @@
 Runs under `python -I`, imports trusted stdlib machinery before candidate code,
 appends the candidate governance runtime last, explicitly loads only selected
 pinned test modules, and enforces an exact Git-blob execution manifest across
-the entire candidate checkout. Candidate-originated child-process, OS execution,
-and native-library loading capabilities fail closed during qualification.
+the entire candidate checkout. Candidate-originated process/native execution is
+default-denied. The sole subprocess exception is a checker-owned sandbox for the
+exact OpenSSL Ed25519/DER operations required by the frozen qualification corpus.
 
 Authority effect: NONE_EVIDENCE_ONLY.
 """
@@ -17,9 +18,12 @@ from importlib.abc import MetaPathFinder
 from importlib.machinery import PathFinder
 import inspect
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -35,6 +39,12 @@ PROCESS_NATIVE_AUDIT_EVENTS = frozenset({
     "ctypes.dlopen",
     "ctypes.dlsym",
 })
+
+# Freeze process-resolution inputs before any candidate module is imported.
+FROZEN_PROCESS_PATH = os.environ.get("PATH", "")
+_TRUSTED_OPENSSL = shutil.which("openssl", path=FROZEN_PROCESS_PATH)
+TRUSTED_OPENSSL_PATH = Path(_TRUSTED_OPENSSL).resolve() if _TRUSTED_OPENSSL else None
+SYSTEM_TEMP_ROOT = Path(tempfile.gettempdir()).resolve()
 
 
 def _is_under(path: Path, parent: Path) -> bool:
@@ -167,6 +177,68 @@ def _immediate_caller_is_candidate(candidate_root: Path) -> bool:
         return False
 
 
+def _safe_temp_operand(value: object, candidate_root: Path) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        resolved = Path(value).resolve()
+    except (OSError, RuntimeError):
+        return False
+    return _is_under(resolved, SYSTEM_TEMP_ROOT) and not _is_under(resolved, candidate_root)
+
+
+def _openssl_argv_allowed(argv: object, candidate_root: Path) -> bool:
+    if not isinstance(argv, (list, tuple)) or not argv or not all(isinstance(x, str) for x in argv):
+        return False
+    args = list(argv)
+    if args[0] not in {"openssl", str(TRUSTED_OPENSSL_PATH) if TRUSTED_OPENSSL_PATH else ""}:
+        return False
+
+    # Exact frozen qualification shapes only. File operands must be temporary
+    # and outside the candidate checkout, preventing OpenSSL from becoming a
+    # generic candidate-file reader/writer or arbitrary process capability.
+    if len(args) == 9 and args[1:4] == ["pkey", "-pubin", "-in"] and args[5:8] == ["-outform", "DER", "-out"]:
+        return _safe_temp_operand(args[4], candidate_root) and _safe_temp_operand(args[8], candidate_root)
+
+    if len(args) == 6 and args[1:5] == ["genpkey", "-algorithm", "ED25519", "-out"]:
+        return _safe_temp_operand(args[5], candidate_root)
+
+    if len(args) == 7 and args[1:3] == ["pkey", "-in"] and args[4:6] == ["-pubout", "-out"]:
+        return _safe_temp_operand(args[3], candidate_root) and _safe_temp_operand(args[6], candidate_root)
+
+    if len(args) == 10 and args[1:5] == ["pkeyutl", "-sign", "-inkey", args[4]]:
+        expected_flags = ["-rawin", "-in", args[7], "-out", args[9]]
+        if args[5:] != expected_flags:
+            return False
+        return all(_safe_temp_operand(args[i], candidate_root) for i in (4, 7, 9))
+
+    if len(args) == 11 and args[1:5] == ["pkeyutl", "-verify", "-pubin", "-inkey"]:
+        if args[6:8] != ["-rawin", "-in"] or args[9] != "-sigfile":
+            return False
+        return all(_safe_temp_operand(args[i], candidate_root) for i in (5, 8, 10))
+
+    return False
+
+
+def _candidate_subprocess_allowed(audit_args: tuple[object, ...], candidate_root: Path) -> bool:
+    if TRUSTED_OPENSSL_PATH is None or not TRUSTED_OPENSSL_PATH.is_file():
+        return False
+    if os.environ.get("PATH", "") != FROZEN_PROCESS_PATH:
+        return False
+    if shutil.which("openssl", path=FROZEN_PROCESS_PATH) is None:
+        return False
+    if Path(shutil.which("openssl", path=FROZEN_PROCESS_PATH)).resolve() != TRUSTED_OPENSSL_PATH:
+        return False
+    if len(audit_args) < 4:
+        return False
+    executable, argv, cwd, env = audit_args[:4]
+    if executable not in {"openssl", str(TRUSTED_OPENSSL_PATH)}:
+        return False
+    if cwd is not None or env is not None:
+        return False
+    return _openssl_argv_allowed(argv, candidate_root)
+
+
 class _CandidatePinFinder(MetaPathFinder):
     def __init__(self, candidate_root: Path, allowed: set[str]):
         self.candidate_root = candidate_root
@@ -209,6 +281,8 @@ def _install_runtime_guard(
 
     def audit(event, args):
         if event in PROCESS_NATIVE_AUDIT_EVENTS and _stack_contains_candidate(candidate_root, 2):
+            if event == "subprocess.Popen" and _candidate_subprocess_allowed(args, candidate_root):
+                return
             raise RuntimeError(
                 f"runtime guard rejected candidate-originated process/native execution: {event}"
             )
@@ -251,11 +325,6 @@ def _install_runtime_guard(
                 )
             return
 
-        # Attribute synthetic eval/exec only when candidate code is the direct
-        # caller. Trusted stdlib helpers may legitimately use eval/exec while a
-        # candidate frame is lower in the stack (for example namedtuple inside
-        # runpy imports); whole-checkout real-file execution remains separately
-        # guarded below by origin and exact blob identity.
         if filename.startswith("<") and _immediate_caller_is_candidate(candidate_root):
             raise RuntimeError(
                 "runtime guard rejected synthetic dynamic code execution from candidate checkout"
