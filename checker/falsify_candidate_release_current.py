@@ -4,9 +4,9 @@
 This checker-owned wrapper preserves the reviewed RELEASE falsifier while
 rebinding only the exact candidate SHA, the authenticated RELEASE-root blob,
 and the F-08-required independent adjudication App check. It requires both an
-exhaustive checker-owned candidate-local static import closure audit and an
-execution-time exact-pin guard inside the isolated qualification runner before
-RELEASE external qualification can pass. Authority effect: none.
+exhaustive checker-owned static import closure audit and an execution-time
+exact-pin guard over the entire candidate checkout before RELEASE external
+qualification can pass. Authority effect: none.
 """
 from __future__ import annotations
 
@@ -26,35 +26,35 @@ release.RELEASE_REQUIRED_CHECKS = frozenset(
 )
 runtime_closure.CANDIDATE_SHA = CURRENT_RELEASE_CANDIDATE_SHA
 
-# Runtime execution must be authorized by an existing checker-owned exact pin,
-# regardless of whether the file is production runtime, an extra execution
-# helper, or a qualification test/helper imported by another pinned test.
-# Derive one execution manifest from all authoritative pin sets; never maintain
-# a separate handwritten runtime allowlist.
-_runtime_execution_pins = dict(runtime_closure.PINNED_RUNTIME_BLOBS)
+# Runtime execution must be authorized by an existing checker-owned exact pin.
+# The isolated runner now interprets manifest keys relative to the candidate
+# checkout root, not merely governance-runtime/. Build one candidate-root
+# execution manifest from all authoritative candidate-code pin sets.
+_candidate_execution_pins: dict[str, str] = {}
 
 
-def _add_runtime_pin(runtime_relpath: str, blob: str) -> None:
-    existing = _runtime_execution_pins.get(runtime_relpath)
+def _add_candidate_pin(candidate_relpath: str, blob: str) -> None:
+    existing = _candidate_execution_pins.get(candidate_relpath)
     if existing is not None and existing != blob:
         raise RuntimeError(
-            f"conflicting runtime pin for {runtime_relpath}: {existing} != {blob}"
+            f"conflicting candidate execution pin for {candidate_relpath}: {existing} != {blob}"
         )
-    _runtime_execution_pins[runtime_relpath] = blob
+    _candidate_execution_pins[candidate_relpath] = blob
 
+
+for runtime_relpath, blob in runtime_closure.PINNED_RUNTIME_BLOBS.items():
+    _add_candidate_pin(f"governance-runtime/{runtime_relpath}", blob)
 
 for relpath, blob in release.EXTRA_EXECUTION_BLOBS.items():
-    prefix = "governance-runtime/"
-    if relpath.startswith(prefix):
-        _add_runtime_pin(relpath[len(prefix):], blob)
+    _add_candidate_pin(relpath, blob)
 
 # The R10/R11 checker owns the exact qualification-test blob map. Tests are
-# executable candidate-local Python and may import one another (for example the
-# unittest bridge), so they are part of the execution authorization closure.
+# executable candidate-local Python and may import one another, so they are
+# part of the whole-checkout execution authorization closure.
 for runtime_relpath, blob in release.r10.r9.EXPECTED_QUALIFICATION_TEST_BLOBS.items():
-    _add_runtime_pin(runtime_relpath, blob)
+    _add_candidate_pin(f"governance-runtime/{runtime_relpath}", blob)
 
-release.r10.RUNTIME_PINNED_BLOBS = _runtime_execution_pins
+release.r10.RUNTIME_PINNED_BLOBS = _candidate_execution_pins
 
 _original_extra_release_paths = release.verify_and_execute_extra_release_paths
 
