@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 """Host-side launcher for F-02 RELEASE qualification sandbox.
 
-Runs the exact candidate qualification corpus in a Docker sandbox with:
-- no network;
-- read-only root filesystem;
-- read-only candidate and checker mounts;
-- all Linux capabilities dropped;
-- no-new-privileges;
-- one-PID limit for the candidate container;
-- dedicated writable tmp/socket bind only;
-- checker-owned host OpenSSL helper over AF_UNIX.
+Runs the exact candidate qualification corpus in a Docker sandbox with no
+network, read-only root/candidate/checker filesystems, all capabilities dropped,
+no-new-privileges, and a one-PID candidate container. Exact frozen OpenSSL
+operations are delegated to a checker-owned host helper over AF_UNIX.
 
-The host helper independently validates the frozen Ed25519/DER command contract.
 Authority effect: NONE_EVIDENCE_ONLY.
 """
 from __future__ import annotations
@@ -66,7 +60,6 @@ def _map_argv(argv: object, host_io: Path, trusted_openssl: Path) -> list[str] |
     if args[0] not in {"openssl", str(trusted_openssl)}:
         return None
     args[0] = str(trusted_openssl)
-
     path_positions: tuple[int, ...] | None = None
     if len(args) == 9 and args[1:4] == ["pkey", "-pubin", "-in"] and args[5:8] == ["-outform", "DER", "-out"]:
         path_positions = (4, 8)
@@ -80,7 +73,6 @@ def _map_argv(argv: object, host_io: Path, trusted_openssl: Path) -> list[str] |
         path_positions = (5, 8, 10)
     else:
         return None
-
     for index in path_positions:
         mapped = _map_temp_path(args[index], host_io)
         if mapped is None:
@@ -154,13 +146,41 @@ def _docker_available() -> None:
     subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"], check=True, stdout=subprocess.PIPE, text=True)
 
 
+def _build_docker_cmd(candidate_root: Path, checker_dir: Path, host_io: Path, manifest_b64: str, tests: list[str]) -> list[str]:
+    return [
+        "docker", "run", "--rm",
+        "--network", "none",
+        "--read-only",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--pids-limit", "1",
+        "--memory", "512m",
+        "--cpus", "1.0",
+        "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m",
+        "-e", "PYTHONDONTWRITEBYTECODE=1",
+        "-e", "TMPDIR=/sandbox-io",
+        "-e", "GIT_CONFIG_COUNT=1",
+        "-e", "GIT_CONFIG_KEY_0=safe.directory",
+        "-e", "GIT_CONFIG_VALUE_0=/candidate",
+        "-v", f"{candidate_root}:{CONTAINER_CANDIDATE}:ro",
+        "-v", f"{checker_dir}:{CONTAINER_CHECKER}:ro",
+        "-v", f"{host_io}:{CONTAINER_IO}:rw",
+        "-w", str(CONTAINER_CHECKER),
+        SANDBOX_IMAGE,
+        "python", "-I", "/checker/run_candidate_unittests_isolated_v3.py",
+        "/candidate/governance-runtime",
+        "--helper-socket", "/sandbox-io/crypto.sock",
+        "--runtime-pin-manifest-b64", manifest_b64,
+        *tests,
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("candidate_runtime")
     parser.add_argument("--runtime-pin-manifest-b64", required=True)
     parser.add_argument("tests", nargs="+")
     ns = parser.parse_args()
-
     _docker_available()
     runtime = Path(ns.candidate_runtime).resolve()
     candidate_root = runtime.parent
@@ -184,32 +204,7 @@ def main() -> int:
             stop.set(); thread.join(timeout=1)
             raise RuntimeError(helper_errors[0] if helper_errors else "crypto helper socket did not start")
 
-        cmd = [
-            "docker", "run", "--rm",
-            "--network", "none",
-            "--read-only",
-            "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges",
-            "--pids-limit", "1",
-            "--memory", "512m",
-            "--cpus", "1.0",
-            "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m",
-            "-e", "PYTHONDONTWRITEBYTECODE=1",
-            "-e", "TMPDIR=/sandbox-io",
-            "-e", "GIT_CONFIG_COUNT=1",
-            "-e", "GIT_CONFIG_KEY_0=safe.directory",
-            "-e", "GIT_CONFIG_VALUE_0=/candidate",
-            "-v", f"{candidate_root}:{CONTAINER_CANDIDATE}:ro",
-            "-v", f"{checker_dir}:{CONTAINER_CHECKER}:ro",
-            "-v", f"{host_io}:{CONTAINER_IO}:rw",
-            "-w", str(CONTAINER_CHECKER),
-            SANDBOX_IMAGE,
-            "python", "-I", "/checker/run_candidate_unittests_isolated_v3.py",
-            "/candidate/governance-runtime",
-            "--helper-socket", "/sandbox-io/crypto.sock",
-            "--runtime-pin-manifest-b64", ns.runtime_pin_manifest_b64,
-            *ns.tests,
-        ]
+        cmd = _build_docker_cmd(candidate_root, checker_dir, host_io, ns.runtime_pin_manifest_b64, ns.tests)
         print("F02_SANDBOX_POLICY network=none rootfs=ro caps=none no_new_privs=true pids=1 candidate=ro checker=ro")
         try:
             result = subprocess.run(cmd, check=False)
